@@ -164,11 +164,12 @@ env:
 
 ## EC2 Capacity Blocks for ML
 
-For **planned multi-day training**, Capacity Blocks guarantee p5/p5e/trn1/trn2 capacity at pricing **substantially below on-demand** ([pricing page](https://aws.amazon.com/ec2/capacityblocks/pricing/)).
+For **planned multi-day training**, Capacity Blocks guarantee accelerated capacity (p4d/p4de, p5/p5e/p5en, p6-b200/p6-b300, trn1/trn2, and other supported families — see the [pricing page](https://aws.amazon.com/ec2/capacityblocks/pricing/) for the current list) at pricing **substantially below on-demand**.
 
 - Use Capacity Blocks for: scheduled training runs, benchmark campaigns, customer demos requiring guaranteed GPU
 - Do **not** use for: inference (On-Demand with Karpenter consolidation is more flexible)
 - Integration: Karpenter EC2NodeClass `capacityReservationSelectorTerms` targets the Capacity Block reservation
+- **Single-AZ:** a CB is scoped to one Availability Zone. The consuming NodePool/EC2NodeClass must be constrained to that AZ (and, for multi-node training, the CB is placed in a single cluster/UltraCluster for low-latency EFA) — nodes can't span the reservation across zones.
 
 ### Karpenter consumes reservations — it never purchases them
 
@@ -177,6 +178,8 @@ For **planned multi-day training**, Capacity Blocks guarantee p5/p5e/trn1/trn2 c
 The workflow is **manual-first, Karpenter-second**:
 
 **1. Customer purchases the CB** (console or CLI) — `describe-capacity-block-offerings` to find an offering, then `purchase-capacity-block`. Purchase returns an offering ID (`cb-…`); the resulting reservation ID is `cr-…`. Payment is upfront, and the reservation is **not usable until it becomes `active`** (it sits in `payment-pending` → `scheduled` first — a `scheduled` CB has **zero available capacity**). A CB **can't be cancelled** once reserved — but **extensions ARE possible** (request before expiry; not guaranteed, capacity-dependent). See [Find and purchase Capacity Blocks](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/capacity-blocks-purchase.html) and [Extend Capacity Blocks](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/capacity-blocks-extend.html) for current duration/instance-count limits, payment states, and timing.
+
+> **IAM — spending authority:** `ec2:PurchaseCapacityBlock` commits real money upfront. Scope it to FinOps/platform-admin roles, not to cluster operators or CI. Karpenter's node role never needs it — Karpenter only *consumes* the reservation, so its permissions cover launching/terminating instances, not purchasing capacity.
 
 ```bash
 aws ec2 describe-capacity-block-offerings \
