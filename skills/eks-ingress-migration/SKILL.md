@@ -196,7 +196,7 @@ list_k8s_resources(cluster_name="<cluster>", kind="Node", api_version="v1")
 
 An assessment of an unhealthy cluster is misleading. Verify, read-only:
 1. **Nodes Ready:** `kubectl get nodes` — flag any not `Ready` (Auto Mode may have 0 nodes until a workload schedules; note that separately).
-2. **Ingress controllers healthy:** for each controller Deployment, confirm `availableReplicas > 0` and no pods in `ImagePullBackOff` / `ErrImagePull` / `CrashLoopBackOff`. **If a controller itself is unhealthy, surface it as the first finding** — its routing claims cannot be trusted.
+2. **Ingress controllers healthy:** for each controller Deployment, confirm `availableReplicas > 0` and no pods in `ImagePullBackOff` / `ErrImagePull` / `CrashLoopBackOff`. **If a controller is unhealthy, verify before you conclude it is dead:** for ingress-nginx confirm **all** replicas are down (a multi-replica controller can serve while one pod crashloops); for the AWS LB Controller check the **ALB/target-group** state (the ALB keeps serving while the pod is down). A broken controller **with bound routes** is a **suspected active outage** — surface it **first, as an urgent flag, outside the migration score**; **with zero bound routes** it is **tech debt (1)**. Either way its routing claims cannot be trusted until verified.
 3. **Egress sanity (if pods can't pull):** cluster-wide `ImagePullBackOff` usually means broken node egress. Optionally inspect the node subnets' route table for a `blackhole` default route (deleted NAT gateway) via `aws ec2 describe-route-tables`. Report it as an environment caveat — do not attempt to fix it (read-only).
 
 **Action 7 — Detect EKS Auto Mode (read-only)**
@@ -211,7 +211,7 @@ Auto Mode is enabled when `computeConfig.enabled = true`. On Auto Mode, recogniz
 For each cluster, run the full assessment:
 1. Read each steering file in order
 2. Execute the checks
-3. Score each item by Impact (1–5) per the Impact Indicator
+3. Score each item by Impact (0–5) per the Impact Indicator
 4. **Collect topology data** — Ingress resources, controllers, backend services, and Node information (instance IDs, instance types)
 
 ### Step 8: Current Architecture Topology (per cluster)
@@ -303,24 +303,27 @@ For each cluster that has Ingress resources, generate manifest files:
 
 ## Rating Rubric
 
-Score every finding by **Impact 1–5** using the **Impact Indicator** rubric (defined in the report, before Assessment Summary). Weigh security/reputation, business/revenue, and the nature & effort to remediate.
+Score every finding by **Impact 0–5** using the **Impact Indicator** rubric (defined in the report, before Assessment Summary). Set severity by **priority order: (1) business logic / revenue — the live traffic at stake · (2) security / reputation · (3) effort to remediate**. **Effort is NOT a severity driver** — never move a score because a fix looks easy or hard. **Presence is decided by estate state:** an absent controller / empty estate / orphaned dead config is a **non-event (0)**; a present-but-broken controller with **zero bound routes** is **tech debt (1) + cleanup note**, while broken **with bound routes** is a **suspected active outage** flagged urgently **outside** the 0–100 score. **Carve-out:** a running controller with a control-plane CVE (e.g. an admission-webhook RCE) is a security finding **even at zero routes**. Security anchors on exposure/blast-radius, business on live traffic.
 
 | Impact | Band | Meaning |
 |--------|------|---------|
-| 🟡 1–2 | Low | Hardening gap / best-practice; no revenue/downtime impact; hours–1 day, single-scope. |
-| 🟠 3–4 | Medium | Limited-reputation breach or short-downtime revenue loss; tech debt hard to reverse; area/single-cluster scope. |
-| 🔴 5 | High | Major/reputational breach or prolonged downtime; needs re-design/re-architecture (may need approval). |
+| 🟢 0 | Non-event | Absent controller, empty estate, or orphaned/dead config — nothing to migrate. List it, deduct 0. *Not a non-event:* a reachable known-CVE/EOL controller (control-plane exposure survives zero routes), or a broken controller with bound routes (active outage — flag separately, outside the score). |
+| 🟡 1–2 | Low | No revenue/downtime impact; hardening gap / best-practice; **or a present-but-broken controller with zero bound routes = tech debt (1)**. |
+| 🟠 3–4 | Medium | Short-downtime revenue loss or moderately-important live flow; limited-reputation breach; tech debt hard to reverse. |
+| 🔴 5 | High | Business-critical revenue loss / prolonged downtime on live traffic, or a major/reputational breach on a live path; needs re-design/re-architecture (may need approval). |
 | ⬜ Unknown | — | Cannot determine — state what to check and why. |
 
-> Easy-to-deploy prerequisites (e.g. installing CRDs) are **Low** even if they block a path. Never use GREEN/AMBER/RED.
+> Easy-to-deploy prerequisites (e.g. installing CRDs) are **Low** even if they block a path — effort never sets severity. Never use GREEN/AMBER/RED.
 
 ## Migration Difficulty Score
 
 Every report leads with a single **Migration Difficulty Score (0–100)** plus a separate **Re-architecture Gate** badge:
 
-- **High score = little change (easy); low score = much change (hard).** It is a relative *effort index* from the per-finding Impact ratings — not a manday estimate (we cannot know who implements).
-- **Deduction model, no artificial cap.** Start at 100, subtract weighted points per finding (Impact 5→10, 4→6, 3→4, 2→2, 1→1), cap per category, `score = max(0, 100 − Σ)`. The score is **never** locked at a ceiling — a single hard route no longer flattens it.
-- **Re-architecture Gate (separate, informational):** routes needing redesign/approval (Lua/snippet/mirror, TLS passthrough/mTLS, cross-namespace ownership) are reported as a `⛔ N routes` badge next to the score — they do not overwrite the number. Score = "how much work?"; gate = "does anything need a redesign decision?".
+- **High score = little change (easy); low score = much change (hard).** It measures the *amount of the estate that must change*, rolled up from the per-finding Impact ratings — **not** a manday estimate and **not** a remediation-effort index (we cannot know who implements, and effort never sets severity).
+- **Empty / non-migratable estate = 100.** No controller + no IngressClass + no Ingress → **100 / TRIVIAL** with a "nothing to migrate" note (cluster/node upgrades are out of scope, not counted as migration). This **also** applies when the only controller present is a healthy migration-*target* controller (e.g. AWS LB Controller) with nothing bound to migrate **and it is not CVE/EOL-affected** — a reachable vulnerable controller is a security finding even at zero routes, so do **not** short-circuit it (see `references/report-generation.md` §1.0-A). **Orphaned Ingress objects with no controller = dead config = 0** with a loud "Migration Crew Alert" note (headline is 100 / TRIVIAL only if there are no other live findings). See `references/report-generation.md` §1.0.
+- **Presence vs. absence.** Absent controller = **0** (non-event). Present-but-broken (CrashLoopBackOff/unreachable) with **zero bound routes** = **1 tech-debt** deduction + mandatory cleanup note; **with bound routes** = **suspected active outage**, flagged urgently **outside** the 0–100 score. Neither replaces the migration-difficulty of that controller's config (its routes remain migratable). Verify "no traffic" by read-only evidence (all nginx replicas down; ALB/target-group state for the LBC) — if you cannot verify, treat the estate as live.
+- **Deduction model, no artificial cap.** Start at 100, subtract weighted points per finding (Impact 5→10, 4→6, 3→4, 2→2, 1→1, non-event 0), cap per category, `score = max(0, 100 − Σ)`. The score is **never** locked at a ceiling — a single hard route no longer flattens it.
+- **Re-architecture Gate (separate, informational):** routes **and non-route conditions** needing redesign/approval — routes (Lua/snippet/mirror, TLS passthrough/mTLS, cross-namespace ownership) plus conditions (no-rollback cutover, **EOL/CVE control-plane exposure**, Auto Mode LB ownership race) — are reported as a `⛔ N route(s)/condition(s)` badge next to the score; they do not overwrite the number. Score = "how much work?"; gate = "does anything need a redesign decision?".
 - **Clean routes count at 0 effort:** an Ingress already on the ALB controller, Gateway API, or a supported 3rd-party controller contributes 0 and is excluded from the Volume work-count, so "X of N already done" is visible and lifts the score.
 - **Feature-gap is tiered:** features with no native ALB annotation but a standard workaround — **CORS** (app middleware), **IP allowlist** (Security Group / WAF), **rate-limit** (WAF) — are **Impact 2** (performance/hardening) or **3** (business-logic-entangled), never 4–5. Only no-workaround features (Lua/snippet/mirror/regex-capture) score heavy.
 - Bands: 90–100 TRIVIAL · 80–89 EASY · 70–79 MODERATE · 60–69 HARD · 0–59 VERY HARD.
