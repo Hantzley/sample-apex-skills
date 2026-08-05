@@ -113,7 +113,7 @@ module "eks" {
 
 | Feature | eks-auto-mode | eks-capabilities | eks-managed-node-group | self-managed-node-group | karpenter | eks-hybrid-nodes |
 |---------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **K8s Version** | 1.33 | 1.34 | 1.33 | 1.33 | 1.33 | 1.33 |
+| **K8s Version** | 1.34 | 1.34 | 1.34 | 1.34 | 1.34 | 1.34 |
 | **Compute** | Auto Mode | Auto Mode | MNG | ASG | MNG + Karpenter | Hybrid + Cilium |
 | **AL2023** | — | — | ✅ | ✅ | — | — |
 | **Bottlerocket** | — | — | ✅ | ✅ | — | — |
@@ -139,8 +139,8 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 21.0"
 
-  cluster_name    = "auto-mode-cluster"
-  cluster_version = "1.33"
+  name               = "auto-mode-cluster"
+  kubernetes_version = "1.34"
 
   # Enable Auto Mode
   compute_config = {
@@ -151,7 +151,7 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  cluster_addons = {
+  addons = {
     coredns                = {}
     eks-pod-identity-agent = {}
     kube-proxy             = {}
@@ -227,8 +227,8 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 21.0"
 
-  cluster_name    = "mng-al2023"
-  cluster_version = "1.33"
+  name               = "mng-al2023"
+  kubernetes_version = "1.34"
 
   eks_managed_node_groups = {
     default = {
@@ -253,7 +253,7 @@ module "eks" {
     }
   }
 
-  cluster_addons = {
+  addons = {
     coredns                = {}
     eks-pod-identity-agent = { before_compute = true }
     kube-proxy             = {}
@@ -314,8 +314,8 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 21.0"
 
-  cluster_name    = "karpenter-cluster"
-  cluster_version = "1.33"
+  name               = "karpenter-cluster"
+  kubernetes_version = "1.34"
 
   # MNG for system pods (Karpenter controller runs here)
   eks_managed_node_groups = {
@@ -332,7 +332,7 @@ module "eks" {
     "karpenter.sh/discovery" = "karpenter-cluster"
   }
 
-  cluster_addons = {
+  addons = {
     coredns                = {}
     eks-pod-identity-agent = {}
     kube-proxy             = {}
@@ -345,8 +345,6 @@ module "karpenter" {
   source = "terraform-aws-modules/eks/aws//modules/karpenter"
 
   cluster_name          = module.eks.cluster_name
-  enable_pod_identity   = true
-  create_pod_identity_association = true
 
   node_iam_role_additional_policies = {
     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -408,8 +406,8 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 21.0"
 
-  cluster_name    = "hybrid-cluster"
-  cluster_version = "1.33"
+  name               = "hybrid-cluster"
+  kubernetes_version = "1.34"
 
   # Enable hybrid node support
   remote_network_config = {
@@ -524,7 +522,8 @@ module "vpc" {
 ### Standard Add-on Block
 
 ```hcl
-cluster_addons = {
+# v21 (terraform-aws-modules/eks ~> 21.0): the argument is `addons` — it was `cluster_addons` in v20.
+addons = {
   coredns = {
     most_recent = true
   }
@@ -602,8 +601,8 @@ VPC (3 AZs)
 module "eks" {
   source = "terraform-aws-modules/eks/aws"
 
-  cluster_endpoint_public_access  = false
-  cluster_endpoint_private_access = true
+  endpoint_public_access  = false
+  endpoint_private_access = true
 
   # MNG for system pods
   eks_managed_node_groups = {
