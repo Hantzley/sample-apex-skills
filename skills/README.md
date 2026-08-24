@@ -343,7 +343,7 @@ Use when choosing and architecting an Amazon ECS deployment model for a NEW work
 
 ### [ecs-build](./ecs-build/)
 
-Use when building Amazon ECS infrastructure with Terraform, generating apply-ready code for ECS clusters, services, and task definitions across three capacity models — Fargate (FARGATE_SPOT as capacity provider), EC2 Auto Scaling group providers, and ECS Managed Instances. Covers rolling/blue-green/linear/canary deployment config, Express services, Service Connect, private/VPC-endpoint-only networking, secrets, and Graviton. Also use when (1) wiring a Managed Instances capacity provider and its infrastructure IAM role, (2) mixing FARGATE and FARGATE_SPOT in a strategy, (3) rendering the Terraform deployment configuration for a blue/green, linear, or canary strategy, (4) generating VPC endpoints for private or air-gapped ECS, (5) configuring Application Auto Scaling, or (6) rendering the migration of a service from launch type to capacity providers. Skip for EKS/Kubernetes builds (use eks-build), design and launch-type selection (use ecs-architect), CI/CD pipelines and release strategy (use ecs-devops).
+Use when building Amazon ECS infrastructure with Terraform, generating apply-ready code for ECS clusters, services, and task definitions across three capacity models — Fargate (FARGATE_SPOT as capacity provider), EC2 Auto Scaling group providers, and ECS Managed Instances. Covers rolling/blue-green/linear/canary deployment config, Express services, Service Connect, private/VPC-endpoint-only networking, secrets, and Graviton. Also use when (1) wiring a Managed Instances capacity provider and its IAM role, (2) mixing FARGATE and FARGATE_SPOT in a strategy, (3) rendering blue/green, linear, or canary deployment config, (4) generating VPC endpoints for private or air-gapped ECS, (5) configuring Application Auto Scaling, or (6) migrating a service from launch type to capacity providers. Skip for EKS/Kubernetes builds (use eks-build), design and launch-type selection (use ecs-architect), CI/CD pipelines and release strategy (use ecs-devops), and replatforming an existing app onto ECS (use ecs-modernize).
 
 **References** (loaded on demand):
 
@@ -398,6 +398,35 @@ Use whenever someone runs a GPU / ML / GenAI / LLM workload on Amazon ECS: GPU o
 | [service-boundaries.md](./ecs-genai/references/service-boundaries.md) | Service boundaries |
 | [storage.md](./ecs-genai/references/storage.md) | Storage |
 | [use-cases.md](./ecs-genai/references/use-cases.md) | Use cases |
+
+---
+
+### [ecs-modernize](./ecs-modernize/)
+
+Assess an existing app (VMware/EC2) by source code analysis for the replatform vs rearchitect decision, and execute the approved migration onto Amazon ECS. Scope: assessment, strategy decision, migration execution. Covers: source code analysis; language/framework detection (Java, .NET, Spring, Struts, WebSphere tWAS/Liberty); cloud/container fit scoring; strategy recommendation; tWAS containerization and Liberty migration; migration planning; AWS Transform orchestration; containerization and ECR push; Replatform (ECS on EC2, bridge, sticky sessions) and Windows-container environment build; deploy and verification. Triggers: "migrate this app from EC2 to ECS", "can we containerize this VMware-hosted app?", "replatform or rearchitect for ECS?", "modernize this WebSphere app". Skip for greenfield design (ecs-architect), Rearchitect compute-model Terraform (ecs-build), live ECS inventory (ecs-recon), security hardening (ecs-security), cloud-ready .NET IaC (dotnet-aws-ecs), Kubernetes/EKS (eks-design).
+
+**References** (loaded on demand):
+
+| Reference | Description |
+|-----------|-------------|
+| [blocker-detection.md](./ecs-modernize/references/blocker-detection.md) | Blocker detection |
+| [code-transformation-agent-led.md](./ecs-modernize/references/code-transformation-agent-led.md) | Code transformation agent led |
+| [code-transformation.md](./ecs-modernize/references/code-transformation.md) | Code transformation |
+| [containerization-execution.md](./ecs-modernize/references/containerization-execution.md) | Containerization execution |
+| [deploy-verify-handoff.md](./ecs-modernize/references/deploy-verify-handoff.md) | Deploy verify handoff |
+| [rearchitect-path.md](./ecs-modernize/references/rearchitect-path.md) | Rearchitect path |
+| [replatform-environment-build.md](./ecs-modernize/references/replatform-environment-build.md) | Replatform environment build |
+| [replatform-path.md](./ecs-modernize/references/replatform-path.md) | Replatform path |
+| [report-generation.md](./ecs-modernize/references/report-generation.md) | Report generation |
+| [scoring-and-recommendation.md](./ecs-modernize/references/scoring-and-recommendation.md) | Scoring and recommendation |
+| [tech-stack-detection.md](./ecs-modernize/references/tech-stack-detection.md) | Tech stack detection |
+| [windows-environment-build.md](./ecs-modernize/references/windows-environment-build.md) | Windows environment build |
+
+**Assets:**
+
+| Asset | Description |
+|-------|-------------|
+| [replatform-terraform/](./ecs-modernize/assets/replatform-terraform/) | Replatform terraform |
 
 ---
 
@@ -487,6 +516,23 @@ Security and compliance guidance for Amazon ECS — "ECS was unable to assume th
 | [task-container-hardening.md](./ecs-security/references/task-container-hardening.md) | Task container hardening |
 
 ## General
+
+### [dotnet-aws-ecs](./dotnet-aws-ecs/)
+
+Generates IaC (CloudFormation or CDK) and a deployment guide to deploy a .NET workload to Amazon ECS Fargate on Linux containers with an Application Load Balancer. Produces a VPC, ECS cluster, task definition, ALB, and auto-scaling. NOT for Windows containers, EC2 launch type, or Kubernetes/EKS deployments.
+
+**References** (loaded on demand):
+
+| Reference | Description |
+|-----------|-------------|
+| [README.md](./dotnet-aws-ecs/references/README.md) | README |
+| [cdk-template-guide.md](./dotnet-aws-ecs/references/cdk-template-guide.md) | Cdk template guide |
+| [cloudformation-template-guide.md](./dotnet-aws-ecs/references/cloudformation-template-guide.md) | Cloudformation template guide |
+| [deployment-guide-template.md](./dotnet-aws-ecs/references/deployment-guide-template.md) | Deployment guide template |
+| [dockerfile-guide.md](./dotnet-aws-ecs/references/dockerfile-guide.md) | Dockerfile guide |
+| [healthcheck-endpoint-guide.md](./dotnet-aws-ecs/references/healthcheck-endpoint-guide.md) | Healthcheck endpoint guide |
+
+---
 
 ### [graviton-migration](./graviton-migration/)
 
