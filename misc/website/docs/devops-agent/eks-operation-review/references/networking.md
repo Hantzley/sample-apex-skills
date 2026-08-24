@@ -1,17 +1,12 @@
 ---
 title: "Networking"
 description: ""
-custom_edit_url: https://github.com/aws-samples/sample-apex-skills/blob/main/skills/eks-operation-review/references/networking.md
+custom_edit_url: https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/networking.md
 format: md
 ---
 
 :::info[Source]
-This page is generated from [skills/eks-operation-review/references/networking.md](https://github.com/aws-samples/sample-apex-skills/blob/main/skills/eks-operation-review/references/networking.md). Edit the source, not this page.
-:::
-
-
-:::info[Vendored skill]
-This skill is sourced from [eks-operation-review](https://github.com/aws-samples/sample-apex-skills/blob/main/skills/eks-operation-review), also maintained by the APEX team.
+This page is generated from [devops-agent/eks-operation-review/references/networking.md](https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/networking.md). Edit the source, not this page.
 :::
 
 # Networking

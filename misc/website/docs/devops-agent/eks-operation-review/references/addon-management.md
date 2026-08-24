@@ -1,17 +1,12 @@
 ---
 title: "Add-on & Component Management"
 description: ""
-custom_edit_url: https://github.com/aws-samples/sample-apex-skills/blob/main/skills/eks-operation-review/references/addon-management.md
+custom_edit_url: https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/addon-management.md
 format: md
 ---
 
 :::info[Source]
-This page is generated from [skills/eks-operation-review/references/addon-management.md](https://github.com/aws-samples/sample-apex-skills/blob/main/skills/eks-operation-review/references/addon-management.md). Edit the source, not this page.
-:::
-
-
-:::info[Vendored skill]
-This skill is sourced from [eks-operation-review](https://github.com/aws-samples/sample-apex-skills/blob/main/skills/eks-operation-review), also maintained by the APEX team.
+This page is generated from [devops-agent/eks-operation-review/references/addon-management.md](https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/addon-management.md). Edit the source, not this page.
 :::
 
 # Add-on & Component Management

@@ -1,3 +1,14 @@
+---
+title: "Workload Configuration"
+description: ""
+custom_edit_url: https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/workload-configuration.md
+format: md
+---
+
+:::info[Source]
+This page is generated from [devops-agent/eks-operation-review/references/workload-configuration.md](https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/workload-configuration.md). Edit the source, not this page.
+:::
+
 # Workload Configuration
 
 ## Purpose

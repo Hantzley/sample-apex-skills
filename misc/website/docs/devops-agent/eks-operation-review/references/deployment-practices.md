@@ -1,3 +1,14 @@
+---
+title: "Deployment Practices"
+description: ""
+custom_edit_url: https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/deployment-practices.md
+format: md
+---
+
+:::info[Source]
+This page is generated from [devops-agent/eks-operation-review/references/deployment-practices.md](https://github.com/aws-samples/sample-apex-skills/blob/main/devops-agent/eks-operation-review/references/deployment-practices.md). Edit the source, not this page.
+:::
+
 # Deployment Practices
 
 ## Purpose
