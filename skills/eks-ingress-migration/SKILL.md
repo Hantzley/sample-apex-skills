@@ -15,7 +15,7 @@ This skill assesses your live EKS cluster's current Ingress architecture and eva
 
 | Option | Status | Notes |
 |--------|--------|-------|
-| Gateway API (HTTPRoute + Gateway) | ✅ Assessed | Official Kubernetes successor to Ingress. AWS LB Controller supports it (L7 ≥ v2.14, L4 ≥ v2.13; built-in on EKS Auto Mode). |
+| Gateway API (HTTPRoute + Gateway) | ✅ Assessed | Official Kubernetes successor to Ingress. AWS LB Controller supports it (L7 ≥ v2.14, L4 ≥ v2.13.3; built-in on EKS Auto Mode). |
 | AWS Load Balancer Controller (ALB Ingress) | ✅ Assessed | Stay on Ingress API but swap NGINX→ALB. Gets WAF, Cognito, Shield. |
 | AWS Transform (ATX) — Automated | ✅ Included | TD included. For customers with ATX access — fully automated manifest rewriting. |
 
@@ -66,7 +66,7 @@ Before executing checks for any section, read the corresponding reference file f
 
 | User Request | Reference File |
 |---|---|
-| Full migration assessment | ALL files in order (skip gateway-api.md, alb-migration.md, atx-guide.md) |
+| Full migration assessment | ALL files in order (skip gateway-api.md, lbc-migrate-toolkit.md, alb-migration.md, atx-guide.md) |
 | What ingress controllers do I have? | `references/ingress-discovery.md` |
 | Analyze my Ingress resources | `references/ingress-resources.md` |
 | DNS / certs / TLS | `references/dns-certificates.md` |
@@ -75,6 +75,7 @@ Before executing checks for any section, read the corresponding reference file f
 | Migration plan | `references/migration-plan.md` |
 | Generate report | `references/report-generation.md` |
 | Gateway API migration path / prerequisites | `references/gateway-api.md` |
+| Gateway API automation (LBC Ingress → Gateway API `lbc-migrate` toolkit) | `references/lbc-migrate-toolkit.md` |
 | ALB Controller migration path | `references/alb-migration.md` |
 | AWS Transform (ATX) automated path | `references/atx-guide.md` |
 
