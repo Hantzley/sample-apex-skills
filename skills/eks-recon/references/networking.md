@@ -570,12 +570,19 @@ kubectl get globalnetworkpolicies.crd.projectcalico.org --no-headers 2>/dev/null
 # Cilium
 kubectl get crd 2>/dev/null | grep -i cilium.io
 kubectl get ciliumnetworkpolicies -A --no-headers 2>/dev/null | wc -l
+
+# AWS-native network policy CRDs (networking.k8s.aws); ApplicationNetworkPolicy is an Auto Mode CRD
+kubectl get crd 2>/dev/null | grep -i networking.k8s.aws
+kubectl get clusternetworkpolicies.networking.k8s.aws --no-headers 2>/dev/null | wc -l
+kubectl get applicationnetworkpolicies.networking.k8s.aws -A --no-headers 2>/dev/null | wc -l
 ```
 
 - `network_policies.count` = total native NetworkPolicy objects.
 - `network_policies.namespaces_with_policies` = count+list of namespaces holding policies.
 - `calico.detected` = Calico CRDs present; `calico.global_policies` = count of GlobalNetworkPolicies.
 - `cilium.detected` = Cilium CRDs present.
+- `aws_cluster_network_policies` = count of cluster-scoped `ClusterNetworkPolicy` objects (`networking.k8s.aws/v1alpha1`). The CRD is available in all launch modes; enforcement runs on EC2 Linux nodes only.
+- `aws_application_network_policies` = count of namespaced `ApplicationNetworkPolicy` objects (`networking.k8s.aws/v1alpha1`). AWS documents `ApplicationNetworkPolicy` as an EKS Auto Mode CRD; the guarded `kubectl get` returns 0 where the CRD is absent, so report the raw count and expect non-zero results on Auto Mode clusters (`auto_mode.enabled: true`). Its FQDN-based egress rules apply only on Auto Mode nodes.
 
 ### 9. external-dns
 
@@ -748,6 +755,8 @@ networking:
       global_policies: int          # count of GlobalNetworkPolicies
     cilium:
       detected: bool
+    aws_cluster_network_policies: int      # count of ClusterNetworkPolicy (networking.k8s.aws/v1alpha1); CRD in all launch modes, enforcement EC2 Linux only
+    aws_application_network_policies: int   # count of ApplicationNetworkPolicy (networking.k8s.aws/v1alpha1); AWS-documented as an Auto Mode CRD, FQDN egress applies only on Auto Mode nodes
 
   # --- external-dns ---
   external_dns:
