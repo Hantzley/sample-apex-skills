@@ -51,6 +51,52 @@ When investigating scaling issues, check metrics in both upstream and downstream
 
 EKS automatically scales the control plane (API servers across 2+ AZs, etcd across 3 AZs), but there are limits on how fast it scales.
 
+For large clusters that hit these auto-scaling limits, **EKS Provisioned Control Plane (PCP)** directly addresses the API-scaling concern: it offers a 99.99% SLA, an 8XL control-plane tier (added 2026-03), and faster pod autoscaling (added 2026-07). See [Amazon EKS Provisioned Control Plane](https://docs.aws.amazon.com/eks/latest/userguide/eks-provisioned-control-plane.html). Consider it before relying solely on the Terraform-level burst knobs below.
+
+### Control Plane Configuration Parameters
+
+**As of 2026-08-12**, EKS lets you customize selected managed control-plane component settings directly on the cluster ([Advanced Kubernetes control plane configuration](https://docs.aws.amazon.com/eks/latest/userguide/control-plane-configuration.html)), via new fields on the existing `CreateCluster` / `UpdateClusterConfig` APIs — `kubeSchedulerConfig`, `kubeControllerManagerConfig`, and `kubeApiServerConfig`. Settings are **cluster-wide** (they apply to every workload — you can't scope them to a namespace); EKS validates each change, records it in CloudTrail, and there's **no additional charge for the configuration itself**. A change is **not instant** — EKS applies it as a rolling control-plane update that takes several minutes (block on `aws eks wait cluster-active`, or track `DescribeUpdate`), and the cluster keeps the same availability and performance throughout. Requires **Kubernetes 1.31+** and is available in all AWS commercial, GovCloud (US), and China Regions where EKS is available. Configure it via the Console, **eksctl**, AWS CLI / EKS API (SDKs), CloudFormation, or **AWS CDK**; support for **ACK and Terraform is coming soon** (as of 2026-08-20).
+
+| Component | Parameter | Supported values | Default | Requires PCP |
+|---|---|---|---|---|
+| kube-scheduler | `nodeResourcesFit.scoringStrategy` | `LeastAllocated`, `MostAllocated` | `LeastAllocated` (`cpu:1, memory:1`) | No |
+| kube-controller-manager | `horizontalPodAutoscalerControllerConfig.horizontalPodAutoscalerSyncPeriod` | `10s`–`15s` | `15s` | **Yes** |
+| kube-apiserver | `eventTtl` | `10m`–`60m` | `60m` | No |
+| kube-apiserver | `serviceNodePortRange` (`minPort`/`maxPort`) | `10260`–`32767` | `30000`–`32767` | No |
+
+The values above are as-published for K8s 1.31+; treat **`DescribeClusterVersions`** as the source of truth for the current default and supported range per version (`aws eks describe-cluster-versions --cluster-versions <ver>`), especially if you automate cluster config across versions. There is **no reset operation**, and omitting a field on update does not clear it (updates merge) — to revert *any* parameter, set it explicitly back to its default (look the default up via `DescribeClusterVersions`).
+
+**Scheduler — `MostAllocated` (bin-packing).** `LeastAllocated` (default) spreads pods to leave headroom on every node; `MostAllocated` packs pods onto already-utilized nodes so the same workloads run on fewer nodes, and node pools that support consolidation can then reclaim the emptied ones. Before relying on it for cost:
+
+- It only changes **scoring among nodes that can already run the pod** — it does **not** change how Karpenter or EKS Auto Mode provisions or removes nodes. Bin-packing happens onto *existing* capacity, so validate the combined behavior against your provisioner before trusting it for savings.
+- **Running pods are never moved** — the strategy affects future placement only. To rebalance, evict/restart pods.
+- Packing **concentrates blast radius** (more pods lost per node/AZ failure) and densely packed nodes fill faster, so pods can sit `Pending` while new capacity comes up. Watch the headroom trade-off.
+- In **multi-tenant** clusters, packing concentrates **correlated-failure / blast-radius** risk (one dense node's *involuntary* loss — unhealthy node, instance retirement, AZ disruption — can take out a whole tenant or service). Spread replicas across failure domains with `topologySpreadConstraints` (the remedy for involuntary loss); PDBs only bound *voluntary* disruptions (the drains/evictions that `MostAllocated`-driven consolidation triggers), not a node failing. For the separate resource-isolation dimension (noisy neighbors on a packed node), rely on per-pod requests/limits and `ResourceQuota`/`LimitRange`.
+- You can optionally weight resources (`cpu`, `memory`, `nvidia.com/gpu`, `aws.amazon.com/neuron`, `aws.amazon.com/neuroncore`; weights 1–100) — useful when an accelerator, not CPU/memory, is the scarce resource.
+
+**Controller manager — HPA sync period (requires PCP).** Shortening `horizontalPodAutoscalerSyncPeriod` from the default `15s` toward `10s` makes HPA react sooner to load — a fit for many-HPA / bursty clusters. It **requires [Provisioned Control Plane](https://docs.aws.amazon.com/eks/latest/userguide/eks-provisioned-control-plane.html)** — the config itself is free, but this is the one parameter that forces a **paid PCP tier** (billed at the hourly rate for your chosen tier), which is sized to absorb the extra reconcile traffic and pairs with PCP's faster pod autoscaling (noted above). Trade-off: a shorter period gives the controller less time per cycle, so it **lowers the number of HPA objects the control plane can reconcile on schedule** (≈one-third fewer going `15s`→`10s`). EKS does **not** validate the period against your HPA count and won't alarm if it's exceeded — the symptom is *slower* autoscaling, the opposite of intent. Count your objects (`kubectl get hpa -A --no-headers | wc -l`) first, and revert to `15s` if scaling lags. **One-way lock:** while this parameter is set to any non-default value you cannot move the control plane from Provisioned back to Standard mode — reset it to `15s` first, then switch the tier to `standard`.
+
+**API server — event retention (`eventTtl`).** High-churn clusters (batch, CI/CD, AI/ML, frequent CronJobs) accumulate thousands of events that consume etcd space and slow event LISTs. Shortening retention from `60m` toward `10m` sheds that pressure — but it applies to **new events only** (existing events age out on their original TTL), deleted events are unrecoverable, and it narrows the `kubectl get events` / `describe` window for incident investigation and debugging. (Kubernetes events are ephemeral diagnostics, **not** the audit record — the EKS control-plane Kubernetes audit log (CloudWatch Logs) and AWS API-level auditing (CloudTrail) are separate and unaffected by `eventTtl`.) Shorten only if you ship events to a durable store, so investigation doesn't depend on the in-cluster TTL.
+
+**API server — service node port range.** Widen or shift `serviceNodePortRange` (bounded `10260`–`32767`) to align node-port allocation with existing firewall policy, or to support more services — especially useful when migrating apps that expect fixed ports outside the default `30000`–`32767`. The range covers `NodePort` services and, by default, `type=LoadBalancer` services too, so narrowing it can affect LoadBalancer services as well, not just NodePort. `minPort ≤ maxPort` is enforced, and existing services keep their ports (only recreating a service reallocates). Before changing the range, confirm your security groups and network ACLs allow it and that it doesn't collide with ports other node software uses — the `10260` floor exists to clear Kubernetes node health ports (kubelet `10248`, kube-proxy `10256`). What's actually exposed on node IPs is the set of *allocated* NodePorts plus your SG/NACL rules (not the configured range width itself), so keep those locked down.
+
+> **Roll cluster-wide changes out carefully.** Every parameter here affects the entire cluster and all workloads. Test in a non-production cluster first, and change one parameter at a time so you can attribute any behavior change.
+
+### etcd Database Size Limits
+
+etcd database size is a hard ceiling, not a soft target — when it is exceeded, etcd emits a "no space" alarm and the cluster goes **read-only** (no new pods, no scaling, no deployments). Know your ceiling and watch the *trend* toward it. The following figures are per the [EKS Provisioned Control Plane docs](https://docs.aws.amazon.com/eks/latest/userguide/eks-provisioned-control-plane.html), verified for EKS v1.30–v1.34+ (re-check the page for your version, as tiers and caps evolve):
+
+| Mode | etcd DB size ceiling |
+|---|---|
+| **Standard** (auto-scaling) control plane | **8 GB** |
+| **Provisioned Control Plane** (all tiers) | **16 GB, flat** across every PCP tier (XL → 8XL) |
+
+> **PCP exit restriction.** Once a cluster's etcd database exceeds **8 GB** while on Provisioned mode, you **cannot switch back to Standard** until you reduce it below 8 GB. Growing past the Standard ceiling is a one-way door until you shed data — plan capacity accordingly.
+
+**Alert on the rate of growth toward the ceiling, not on a mid-range absolute.** A database sitting at a healthy fraction of its limit is not a problem — an absolute value in the middle of the range is normal and alarming on it causes fatigue and premature escalation. What matters is a *sustained upward trend* that will reach the ceiling. AWS documents pre-built alert rules for exactly this — `etcdBackendQuotaLowSpace` (near-quota) and `etcdExcessiveDatabaseGrowth` (trend) — in [Managing etcd database size on Amazon EKS clusters](https://aws.amazon.com/blogs/containers/managing-etcd-database-size-on-amazon-eks-clusters/). Track `apiserver_storage_size_bytes` and reduce CRD/object churn (event TTLs, finalizer hygiene) to hold headroom.
+
+**Attribute latency correctly — don't alarm on LIST latency alone.** A high LIST/read latency during a surge is a *symptom* whose root cause may be etcd or the API server. The cluster-wide read SLO is generous (upstream targets **≤30 s** at p99 for cluster/namespace-scoped LISTs; ≤1 s for single-resource reads — see [Kubernetes SLOs](https://github.com/kubernetes/community/blob/master/sig-scalability/slos/slos.md)), so a LIST-latency number that looks alarming in isolation may be within SLO. Correlate LIST latency with `etcd_request_duration_seconds` before tuning — the skill already teaches this chain at [observability.md — API vs etcd Latency](observability.md#api-vs-etcd-latency).
+
 ### Burst Limits
 
 Avoid scaling spikes that increase cluster size by more than ~10% at a time (e.g., 1,000 to 1,100 nodes, or 4,000 to 4,500 pods at once). The control plane auto-scales but needs time to adapt. New clusters will not immediately support hundreds of nodes.
@@ -89,7 +135,7 @@ If you see 429s from your controllers, they're likely making excessive LIST call
 | Metric | What It Tells You |
 |--------|-------------------|
 | `etcd_request_duration_seconds` | etcd latency per operation |
-| `apiserver_storage_size_bytes` (EKS >= 1.28) | etcd database size |
+| `apiserver_storage_size_bytes` | etcd database size |
 
 When etcd's database size exceeds its limit, it emits a "no space" alarm and the cluster becomes **read-only** -- no new pods, no scaling, no deployments.
 
@@ -168,7 +214,7 @@ spec:
 
 Keep worker nodes up to date with the latest EKS-optimized AMIs:
 
-- **Karpenter** automatically uses the latest AMI for new nodes
+- **Karpenter** (v1) selects AMIs via `amiSelectorTerms` on the EC2NodeClass -- it does not auto-track the latest AMI unless you use the `@latest` alias, which is discouraged in production (pin a specific AMI/alias instead)
 - **MNG** requires updating the ASG launch template for patch releases; minor versions are available as managed upgrades
 - Use Bottlerocket for automatic, minimal-downtime updates
 
@@ -248,7 +294,7 @@ Use separate EKS clusters for different application environments (dev, test, pro
 | ELB Type | Default Target Quota | Per-AZ Limit |
 |----------|---------------------|--------------|
 | ALB | 1,000 targets | -- |
-| NLB | 3,000 targets | 500 per AZ |
+| NLB | 3,000 targets | 500 per AZ (500 per LB total with cross-zone load balancing enabled) |
 
 If a service exceeds these targets, split across multiple LBs or use an in-cluster ingress controller. Use Route 53 (weighted DNS), Global Accelerator, or CloudFront to present multiple LBs as a single endpoint.
 
@@ -256,7 +302,7 @@ If a service exceeds these targets, split across multiple LBs or use an in-clust
 
 EndpointSlices reduce API server load compared to Endpoints for large, frequently-scaling services. They include topology information for features like topology-aware routing.
 
-Verify your controllers use them -- for the AWS Load Balancer Controller, enable `--enable-endpoint-slices`.
+Verify your controllers use them -- for older AWS Load Balancer Controller versions, enable `--enable-endpoint-slices`; it is on by default since LBC v2.7+ (and in v3), so no action is needed on current versions.
 
 ### Reduce Control Plane Watches
 
@@ -375,7 +421,7 @@ Karpenter does not have this limitation -- it handles large clusters without sha
 | Node autoscaling | 1,000+ nodes | Use Karpenter or shard CAS |
 | kubectl | Automation/scripts | Enable cache-dir, disable compression |
 | Node efficiency | Any scale | Prefer 4xlarge-12xlarge, match churn to node size |
-| Pod networking | IP exhaustion | Use prefix delegation or IPv6 |
+| Pod networking | IP exhaustion | Use prefix delegation; IPv6 (dual-stack) for larger address space |
 
 **For clusters beyond 1,000 nodes or 50,000 pods**, AWS recommends engaging your support team or TAM for specialist guidance. EKS can support up to 100,000 nodes with appropriate planning.
 

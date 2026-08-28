@@ -21,17 +21,18 @@
 
 ### Amazon GuardDuty for EKS
 
-**Enable EKS Runtime Monitoring** as the first line of defense. GuardDuty analyzes K8s audit logs, VPC flow logs, and DNS logs using ML and threat intelligence to detect threats without manual configuration.
+**Enable Runtime Monitoring** as the first line of defense. GuardDuty's EKS protection is now delivered through the unified **Runtime Monitoring** feature (the separate "EKS Runtime Monitoring" console path has been removed (as of 2026-08-05, per the GuardDuty User Guide); AWS recommends migrating to unified Runtime Monitoring). GuardDuty combines two complementary sources of signal:
 
-**Enable both:**
-- **EKS Audit Log Monitoring** — analyzes K8s audit logs for threats
-- **EKS Runtime Monitoring** — agent-based, detects container-level threats
+- **EKS Protection (audit-log analysis)** — analyzes K8s control-plane audit logs for threats; no agent required.
+- **Runtime Monitoring (agent-based)** — the GuardDuty security agent observes container-level runtime behavior (process, file, and network activity) on your nodes.
 
-**Key finding types:**
-- `Execution:Runtime/CryptocurrencyMiningDetected`
-- `PrivilegeEscalation:Runtime/DockerSocketAccess`
-- `Persistence:Runtime/ReverseShell`
-- `UnauthorizedAccess:IAMUser/AnomalousBehavior`
+These are distinct data sources — audit-log analysis and the runtime agent — so keep them conceptually separate rather than conflating them. GuardDuty applies ML and threat intelligence across both to detect threats without manual rule configuration.
+
+**Key runtime finding types:**
+- `CryptoCurrency:Runtime/BitcoinTool.B`
+- `Impact:Runtime/CryptoMinerExecuted`
+- `PrivilegeEscalation:Runtime/DockerSocketAccessed`
+- `Execution:Runtime/ReverseShell`
 
 GuardDuty produces security findings viewable in the console or via EventBridge for automated response.
 
@@ -104,6 +105,8 @@ helm install falco falcosecurity/falco \
 
 ```yaml
 # Enable network policy support in VPC CNI
+# NOTE: the addon-version below is illustrative -- check the current version with
+# `aws eks describe-addon-versions --addon-name vpc-cni` rather than pinning this value.
 aws eks create-addon --cluster-name my-cluster \
   --addon-name vpc-cni \
   --addon-version v1.14.0-eksbuild.3 \
@@ -111,6 +114,15 @@ aws eks create-addon --cluster-name my-cluster \
 ```
 
 Network policy support is NOT enabled by default — you must enable the `ENABLE_NETWORK_POLICY` flag on the VPC CNI add-on.
+
+Beyond the standard namespaced `NetworkPolicy` API, EKS adds two AWS-native CRDs in the `networking.k8s.aws/v1alpha1` API group (alpha, AWS's own group, not upstream `policy.networking.k8s.io`). Both use VPC CNI **v1.21.1+** (skip v1.21.0: it ships Network Policy Agent v1.3.0, which has a defect affecting existing network policies; v1.21.1 ships the fixed agent v1.3.1. See the [v1.21.0 release note](https://github.com/aws/amazon-vpc-cni-k8s/releases/tag/v1.21.0)). Kubernetes **1.29+** is the EKS Auto Mode / new-cluster rollout floor; `ClusterNetworkPolicy` on standard EC2 clusters has no separate 1.29 requirement.
+
+- **`ClusterNetworkPolicy`**: cluster-scoped, with a `tier: Admin | Baseline` field. The **Admin** tier is evaluated first and **cannot** be overridden by namespace-scoped policies; it supports explicit **Deny / Allow / Pass** actions (a Deny or Allow is terminal; Pass delegates the decision to lower tiers). The **Baseline** tier is an overridable default posture evaluated after `NetworkPolicy`, so a namespace owner's policy can override it. Available in all EKS cluster launch modes.
+- **`ApplicationNetworkPolicy`**: namespaced, documented by AWS as an **EKS Auto Mode** CRD. It supports all fields of the standard Kubernetes `NetworkPolicy` and adds an **FQDN-based egress** filter (allowlist egress by domain name). Per AWS, the DNS/FQDN egress rules are **only applicable to workloads on EKS Auto Mode-launched EC2 instances**; whether an FQDN rule authored on a non-Auto-Mode node is accepted-but-ignored or rejected is not documented, so verify by testing real egress rather than assuming enforcement.
+
+**Evaluation order:** Admin tier first (Deny > Allow > Pass; a Deny or Allow is terminal, only a Pass or no-match proceeds), then `NetworkPolicy` / `ApplicationNetworkPolicy` (which can further restrict but cannot override an Admin Deny), then the Baseline tier (overridable defaults), then default-deny if nothing matches.
+
+Enforcement runs on the VPC CNI eBPF network-policy controller (`enable-network-policy-controller: "true"`, the network-policy-controller config key, distinct from the `ENABLE_NETWORK_POLICY` add-on flag) and applies to **EC2 Linux nodes only** (not Fargate or Windows). Egress policies must still allow TCP and UDP port 53 to CoreDNS (see Step 2 below) or DNS and FQDN filtering will break. Naming gotcha: an `ApplicationNetworkPolicy` and a `NetworkPolicy` sharing the same name in one namespace breaks `PolicyEndpoints` (both are accepted without error, so it is hard to diagnose). Check your installed VPC CNI version before relying on either CRD.
 
 ### Start with Default Deny + DNS Allow
 
@@ -235,7 +247,7 @@ Consider third-party engines when you need advanced features:
 | **Cilium** | Layer 7 (HTTP), DNS hostname rules, eBPF-native |
 | **Calico Enterprise** | Map K8s NP to AWS security groups, compliance reporting |
 
-**Migration:** If switching from Calico/Cilium to VPC CNI network policies, use the [K8s Network Policy Migrator](https://github.com/awslabs/k8s-network-policy-migrator) tool to convert CRDs to native K8s NetworkPolicy resources. Test in a separate cluster before production.
+**Migration:** If switching from Calico/Cilium to VPC CNI network policies, the [K8s Network Policy Migrator](https://github.com/awslabs/k8s-network-policy-migrator) tool can convert CRDs to native K8s NetworkPolicy resources. Note this tool has been **dormant since 2023-08** (no updates), so validate its output against current CRD schemas and always test in a separate cluster before production.
 
 ### Ensure Network Policies Exist via OPA
 
@@ -280,7 +292,9 @@ Traffic between Nitro instance types (C5n, G4, I3en, M5dn, M5n, P3dn, R5dn, R5n,
 For end-to-end encryption between pods:
 - **Istio** — automatic mTLS between all meshed services
 - **Linkerd** — automatic mTLS with minimal configuration
-- **App Mesh** — mTLS with X.509 certificates or Envoy SDS
+- **Cilium** — transparent mTLS / WireGuard-based node-to-node encryption via eBPF
+
+> **Do not adopt AWS App Mesh.** App Mesh reaches **end of support on 2026-09-30**, after which its console and resources become inaccessible. Do not start new App Mesh mTLS deployments; migrate existing ones to Istio, Cilium mTLS, or Linkerd.
 
 ### Ingress and Load Balancer TLS
 

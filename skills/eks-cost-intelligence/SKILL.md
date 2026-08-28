@@ -1,6 +1,6 @@
 ---
 name: eks-cost-intelligence
-description: Run a live EKS cluster cost efficiency assessment — analyze spending across 6 dimensions (compute efficiency, Spot/Graviton adoption, networking, storage, observability, idle resources), calculate a weighted 0-100 Cost Score, and generate a prioritized report with dollar-quantified findings and ready-to-apply remediation snippets. Use this skill when someone asks "how much am I wasting on EKS?", "run a cost audit on my cluster", "what's my biggest cost driver?", "analyze my cluster's cost efficiency", or needs dollar-denominated findings for a FinOps review — even if they don't say "cost intelligence" or "score". Combines live Cost Explorer data, CloudWatch utilization metrics, and Kubernetes resource analysis. Falls back to AWS CLI and kubectl when the EKS MCP server is unavailable. Distinct from eks-best-practices (static advisory guidance), eks-operation-review (operational health), and eks-recon (cluster discovery).
+description: Run a live EKS cluster cost efficiency assessment — analyze spending across 6 dimensions (compute efficiency, Spot/Graviton adoption, networking, storage, observability, idle resources), calculate a weighted 0-100 Cost Score, and generate a prioritized report with dollar-quantified findings and ready-to-apply remediation snippets. Use this skill when someone asks "how much am I wasting on EKS?", "run a cost audit on my cluster", "what's my biggest cost driver?", "analyze my cluster's cost efficiency", or needs dollar-denominated findings for a FinOps review — even if they don't say "cost intelligence" or "score". Combines live Cost Explorer data, CloudWatch utilization metrics, and Kubernetes resource analysis. Falls back to AWS CLI and kubectl when the EKS MCP server is unavailable. Distinct from eks-best-practices (static advisory guidance), eks-operation-review (operational health), and eks-recon (cluster discovery). Distinct from graviton-migration, which EXECUTES the x86→arm64 move, not scoring savings.
 ---
 
 # EKS Cost Intelligence
@@ -45,12 +45,13 @@ This skill is focused on **live cost assessment** — answering the question: "W
 1. **AWS credentials configured** — `aws configure` or `~/.aws/credentials` with EKS access
 2. **kubectl access** to the target cluster (for Kubernetes API queries)
 3. **Required AWS Permissions (minimum):**
-   - `eks:DescribeCluster`, `eks:ListClusters`, `eks:ListNodegroups`, `eks:DescribeNodegroup`
+   - `eks:DescribeCluster`, `eks:ListClusters`, `eks:ListNodegroups`, `eks:DescribeNodegroup`, `eks:ListFargateProfiles`, `eks:DescribeFargateProfile`
    - `ec2:DescribeInstances`, `ec2:DescribeVolumes`, `ec2:DescribeSubnets`, `ec2:DescribeVpcEndpoints`
    - `elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeTargetHealth`
 4. **Optional permissions (enable richer analysis):**
    - `ce:GetCostAndUsage` — enables dollar-accurate spend data from Cost Explorer
    - `cloudwatch:GetMetricData` — enables utilization-based analysis from Container Insights
+   - `elasticfilesystem:DescribeFileSystems`, `elasticfilesystem:DescribeLifecycleConfiguration` — enables EFS Intelligent-Tiering/lifecycle checks in the storage dimension
 
 ### Data Sources
 
@@ -62,6 +63,10 @@ This skill is focused on **live cost assessment** — answering the question: "W
 | **EC2 API** | `aws ec2 describe-instances` | Instance types, pricing tier, Spot vs On-Demand |
 
 If Cost Explorer is unavailable, the skill falls back to node-based cost estimation (see `references/cost-estimation-fallback.md`).
+
+### Default Time Window
+
+Cost Explorer queries use a **7-day lookback by default** (matching the 7-day window used for CloudWatch utilization checks). The user can override the window by asking — e.g., *"use the last 30 days"* — in which case apply the requested window to all Cost Explorer queries. Whichever window is used, record it in the report metadata (`Analysis Window` field) so findings are reproducible and comparable across runs.
 
 ### MCP Server Setup
 
@@ -114,6 +119,7 @@ Collect:
 - Node groups: `aws eks list-nodegroups --cluster-name <cluster>`
 - Node group details: instance types, scaling config, capacity type (ON_DEMAND/SPOT)
 - Add-ons: `aws eks list-addons --cluster-name <cluster>`
+- Fargate profiles: `aws eks list-fargate-profiles --cluster-name <cluster>` — if any profiles exist, describe each one, note which namespaces/label selectors are Fargate-scheduled, and read `references/fargate-costs.md`. Fargate pods are billed on rounded-up pod requests (not node capacity), so exclude them from node-based checks and add the Fargate-specific checks to Steps 1–2.
 - Node inventory: `kubectl get nodes -o wide`
 
 **Action 5 — Confirm and proceed**
@@ -132,6 +138,7 @@ Checks:
 - Low-utilization nodes indicating consolidation opportunities
 - Karpenter consolidation effectiveness (where installed)
 - Workloads without resource requests or limits
+- Fargate pod request right-sizing against Fargate's vCPU/memory combinations — only when Step 0 found Fargate profiles (read `references/fargate-costs.md`, Check F1)
 
 If metrics-server or Container Insights is unavailable, mark utilization checks as SKIPPED and proceed with request-only analysis.
 
@@ -147,6 +154,7 @@ Checks:
 - Stateless multi-replica workloads on On-Demand only
 - Instance type diversity for Spot availability
 - Node Termination Handler or Karpenter interruption handling
+- Interruption-tolerant workloads running on Fargate (EKS has no Fargate Spot) — only when Step 0 found Fargate profiles (read `references/fargate-costs.md`, Check F2)
 
 ### Step 3: Networking Cost Assessment
 
@@ -276,6 +284,7 @@ Before executing checks for any dimension, read the corresponding reference file
 | Storage costs / gp2 / PVC / EBS | `references/storage-costs.md` |
 | Observability / logging / metrics / cardinality | `references/observability-costs.md` |
 | Idle resources / unused / orphaned / zero-scale | `references/idle-resources.md` |
+| Fargate profiles / Fargate pod pricing / request rounding | `references/fargate-costs.md` |
 | Score calculation / scoring algorithm | `references/report-generation.md` |
 | Generate report / produce report | `references/report-generation.md` |
 | Cost data collection / API calls | `references/cost-data-collection.md` |

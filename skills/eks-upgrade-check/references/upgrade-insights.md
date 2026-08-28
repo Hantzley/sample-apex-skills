@@ -17,6 +17,24 @@ For any insight with status other than `PASSING`:
 1. Call `get_eks_insights` with the specific `insight_id`
 2. Record: detailed description, recommendation, affected resources
 
+### CLI fallback (when the EKS MCP server is unavailable)
+
+If the `get_eks_insights` MCP tool is not available, use the AWS CLI directly (this is the
+CLI fallback the top-level skill promises):
+
+```bash
+# Step 1 equivalent — list all upgrade-readiness insights
+aws eks list-insights --cluster-name <cluster> --region <region> \
+  --filter categories=UPGRADE_READINESS
+
+# Step 2 equivalent — detail one non-PASSING insight
+aws eks describe-insight --cluster-name <cluster> --region <region> --id <insight-id>
+```
+
+Requires `eks:ListInsights` and `eks:DescribeInsight`. If neither the MCP tool nor the CLI can
+reach Insights, report Category 7 as UNKNOWN / not-scored — do NOT score it 0 (a denied read is
+not a clean pass).
+
 ### Step 3: Classify Findings
 
 | Insight Status | Severity |
@@ -30,8 +48,14 @@ For any insight with status other than `PASSING`:
 
 AWS Upgrade Insights often overlap with findings from other sections (deprecated APIs, add-on compatibility). When reporting:
 - Note if an insight confirms a finding from another section
-- Do NOT double-count in the score — the insight score is separate from other categories
-- Highlight any insights that reveal issues NOT caught by other checks
+- Do NOT double-count in the score. Match each insight to a category finding by **subject key**:
+  the deprecated API group/version/resource (e.g. `flowcontrol.apiserver.k8s.io/v1beta3`) for
+  Category 2, or the add-on name (e.g. `vpc-cni`) for Category 4. When an insight's subject key
+  matches a finding **already scored in that category**, **suppress the insight's points** (score
+  it 0) and keep the insight only as confirmation evidence in the report — do NOT add its
+  WARNING/ERROR points on top of the category that already owns the finding.
+- Only insights that reveal issues NOT caught by any other check contribute points under
+  Category 7. Highlight those.
 
 ## Important Context for Users
 
@@ -44,4 +68,6 @@ AWS Upgrade Insights checks multiple versions ahead, not just the immediate targ
 ## Score Impact
 
 > **Canonical scoring is defined in `references/report-generation.md` §Category 7.**
-> Quick reference: FAILING = 5 pts, ERROR = 3 pts, WARNING = 2 pts. Max category = 10 pts.
+> Quick reference: ERROR = 5 pts, WARNING = 2 pts, PASSING = 0 pts, UNKNOWN = 0 pts
+> (LOW severity, informational only). Max category = 10 pts. The status enum is
+> PASSING/WARNING/ERROR/UNKNOWN — there is no "FAILING" status.

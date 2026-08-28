@@ -34,7 +34,11 @@ This reference documents the exact API calls needed to collect cost and utilizat
 - IAM permission: `ce:GetCostAndUsage`, `ce:GetSavingsPlansCoverage`
 - Cost Explorer API is only available in `us-east-1` regardless of cluster region
 
-### 1.1 Total EKS Spend by Service (Last 30 Days)
+### Time Window
+
+All Cost Explorer queries in this reference use a **7-day lookback by default**, matching the 7-day window used for CloudWatch utilization metrics. The user can override the window (e.g., "last 30 days") — apply the override consistently to every Cost Explorer query in the assessment and record the window used in the report metadata (`Analysis Window` field). The examples below show a 30-day window for illustration; substitute the active analysis window.
+
+### 1.1 Total EKS Spend by Service
 
 **Via EKS MCP Server:**
 ```
@@ -638,8 +642,7 @@ aws logs start-query \
 list_k8s_resources(
   cluster_name="<cluster>",
   kind="Deployment",
-  api_version="apps/v1",
-  namespace="all"
+  api_version="apps/v1"
 )
 ```
 
@@ -730,8 +733,7 @@ for deploy in deployments.items:
 list_k8s_resources(
   cluster_name="<cluster>",
   kind="PersistentVolumeClaim",
-  api_version="v1",
-  namespace="all"
+  api_version="v1"
 )
 ```
 
@@ -815,8 +817,7 @@ for pvc in pvcs.items:
 list_k8s_resources(
   cluster_name="<cluster>",
   kind="Service",
-  api_version="v1",
-  namespace="all"
+  api_version="v1"
 )
 ```
 

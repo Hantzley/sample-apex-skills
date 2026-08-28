@@ -2,24 +2,28 @@
 # update-pages.sh
 #
 # Generates Docusaurus wrappers for every tracked *.md under skills/,
-# steering/, and examples/ into misc/website/docs/, plus manifests consumed
-# by the homepage SkillGrid and examples grid.
+# steering/, examples/, and devops-agent/ into misc/website/docs/, plus
+# manifests consumed by the homepage SkillGrid and examples grid.
 #
 # Inputs (sources of truth):
-#   skills/**/*.md     (except skills/README.md — marker-generated)
+#   skills/**/*.md        (except skills/README.md — marker-generated)
 #   steering/**/*.md
-#   examples/**/*.md   (README.md → index.md wrappers)
-#   examples/**/*.html (copied to static/)
-#   examples/**/*.png  (copied to static/)
+#   examples/**/*.md      (README.md → index.md wrappers)
+#   examples/**/*.html    (copied to static/)
+#   examples/**/*.png     (copied to static/)
+#   devops-agent/**/*.md  (except devops-agent/README.md — marker-generated)
 #
 # Outputs (regenerated; tracked in git):
-#   misc/website/docs/skills/<name>/index.md       wrapper for SKILL.md
-#   misc/website/docs/skills/<name>/<sub>/<f>.md   wrapper for sub-files
+#   misc/website/docs/skills/<group>/<name>/index.md       wrapper for SKILL.md
+#   misc/website/docs/skills/<group>/<name>/<sub>/<f>.md   wrapper for sub-files
 #   misc/website/docs/skills/index.md              card grid (overwritten)
 #   misc/website/docs/steering/<rel-path>.md       wrappers for steering
 #   misc/website/docs/examples/<path>/index.md     wrapper for README.md
 #   misc/website/docs/examples/index.md            card grid (overwritten)
 #   misc/website/static/examples/                  .html + .png assets
+#   misc/website/docs/devops-agent/<name>/index.md   wrapper for SKILL.md
+#   misc/website/docs/devops-agent/<name>/<f>.md     wrapper for sub-files
+#   misc/website/docs/devops-agent/index.md          listing page (overwritten)
 #   misc/website/static/manifests/skills.json
 #   misc/website/static/manifests/examples.json
 #
@@ -37,6 +41,11 @@
 # Fix: `./misc/update-pages.sh && git add … && commit`.
 
 set -euo pipefail
+# Command substitutions must inherit errexit: parse_frontmatter exits 2 on
+# invalid YAML, and most callers run inside $(...) (derive_title, the index
+# builders). Without this, a broken SKILL.md would be swallowed and the
+# wrapper written with an empty description.
+shopt -s inherit_errexit
 
 MODE="run"
 if [[ "${1:-}" == "--check" ]]; then
@@ -48,6 +57,11 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+python3 -c 'import yaml' 2>/dev/null || {
+  echo "ERROR: PyYAML is required (pip install pyyaml)" >&2
+  exit 1
+}
+
 SKILLS_OUT="$REPO_ROOT/misc/website/docs/skills"
 STEERING_OUT="$REPO_ROOT/misc/website/docs/steering"
 EXAMPLES_OUT="$REPO_ROOT/misc/website/docs/examples"
@@ -56,6 +70,8 @@ EXAMPLES_MANIFEST="$REPO_ROOT/misc/website/static/manifests/examples.json"
 SKILLS_DIR="$REPO_ROOT/skills"
 EXAMPLES_DIR="$REPO_ROOT/examples"
 EXAMPLES_STATIC="$REPO_ROOT/misc/website/static/examples"
+DEVOPS_OUT="$REPO_ROOT/misc/website/docs/devops-agent"
+DEVOPS_DIR="$REPO_ROOT/devops-agent"
 
 GH_BASE="https://github.com/aws-samples/sample-apex-skills/blob/main"
 
@@ -64,6 +80,7 @@ TOUCHED_PATHS=(
   "misc/website/docs/skills"
   "misc/website/docs/steering"
   "misc/website/docs/examples"
+  "misc/website/docs/devops-agent"
   "misc/website/static/manifests"
   "misc/website/static/examples"
 )
@@ -72,17 +89,40 @@ TOUCHED_PATHS=(
 parse_frontmatter() {
   local file="$1"
   local key="$2"
-  awk -v key="$key" '
-    /^---$/ { block++; next }
-    block == 1 && $0 ~ "^" key ":" {
-      sub("^" key ":[ ]*", "")
-      sub("^\"", ""); sub("\"$", "")
-      sub("^'\''", ""); sub("'\''$", "")
-      print
-      exit
-    }
-    block >= 2 { exit }
-  ' "$file"
+  python3 - "$file" "$key" <<'PY'
+import os, sys, yaml
+path, key = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: {path}: {e}", file=sys.stderr)
+    sys.exit(2)
+if not lines or lines[0].rstrip() != "---":
+    sys.exit(0)
+fm = []
+for line in lines[1:]:
+    if line.rstrip() == "---":
+        break
+    fm.append(line)
+else:
+    print(f"ERROR: {path}: unclosed frontmatter block (missing closing '---')", file=sys.stderr)
+    sys.exit(2)
+if len("".join(fm).encode("utf-8")) > 64 * 1024:
+    print(f"ERROR: {path}: frontmatter block too large to parse", file=sys.stderr)
+    sys.exit(2)
+try:
+    data = yaml.safe_load("".join(fm))
+except yaml.YAMLError as e:
+    print(f"ERROR: {path}: {e}", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(data, dict):
+    sys.exit(0)
+val = data.get(key)
+if val is None:
+    sys.exit(0)
+print(" ".join(str(val).split()))
+PY
 }
 
 # --- Extract first # heading from a markdown file -------------------------
@@ -127,6 +167,16 @@ strip_frontmatter() {
     mode == "in_fm" { next }
     mode == "body" { print }
   ' "$file"
+}
+
+# --- Classify a skill into a service group ---
+classify_skill() {
+  local name="$1"
+  case "$name" in
+    eks-*) echo "eks" ;;
+    ecs-*) echo "ecs" ;;
+    *)     echo "general" ;;
+  esac
 }
 
 # --- YAML-safe scalar via JSON encoding -----------------------------------
@@ -188,7 +238,7 @@ def rewrite(m):
 
     if resolved.startswith(".."):
         return f"[{text}]({GH_BASE}/{target}{query}{anchor})"
-    if not resolved.startswith(("skills/", "steering/", "examples/")):
+    if not resolved.startswith(("skills/", "steering/", "examples/", "devops-agent/")):
         return f"[{text}]({GH_BASE}/{resolved}{query}{anchor})"
     if not target.endswith(".md"):
         return f"[{text}]({GH_BASE}/{resolved}{query}{anchor})"
@@ -197,7 +247,31 @@ def rewrite(m):
         resolved = os.path.join(os.path.dirname(resolved), "index.md")
     elif os.path.basename(resolved) == "README.md" and resolved.startswith("examples/"):
         resolved = os.path.join(os.path.dirname(resolved), "index.md")
-    new_target = os.path.relpath(resolved, src_dir)
+    # Insert group prefix for skills (output is nested under group dirs)
+    if resolved.startswith("skills/"):
+        skill_rel = resolved[len("skills/"):]
+        skill_name = skill_rel.split("/")[0]
+        if skill_name.startswith("eks-"):
+            group = "eks"
+        elif skill_name.startswith("ecs-"):
+            group = "ecs"
+        else:
+            group = "general"
+        resolved = f"skills/{group}/{skill_rel}"
+    # Compute relative path from source — for skills sources, also account for group nesting
+    if src.startswith("skills/"):
+        src_skill = src.split("/")[1]
+        if src_skill.startswith("eks-"):
+            src_group = "eks"
+        elif src_skill.startswith("ecs-"):
+            src_group = "ecs"
+        else:
+            src_group = "general"
+        effective_src_dir = f"skills/{src_group}/{src_skill}/" + "/".join(src.split("/")[2:-1])
+        effective_src_dir = effective_src_dir.rstrip("/")
+        new_target = os.path.relpath(resolved, effective_src_dir)
+    else:
+        new_target = os.path.relpath(resolved, src_dir)
     # Strip .md extension for Docusaurus routing
     if new_target.endswith(".md"):
         new_target = new_target[:-3]
@@ -234,28 +308,59 @@ vendored_skill_admonition() {
 
   # Extract metadata from THIRD_PARTY_NOTICES.md (authoritative source)
   local notices="$REPO_ROOT/THIRD_PARTY_NOTICES.md"
-  local author license_id source_url
+  local author license_id source_url license_from_notices
   if [[ -f "$notices" ]]; then
-    source_url="$(awk -v name="$skill_name" '
-      $0 ~ "^## " name { found=1; next }
+    # Pass skill_name via ENVIRON (not -v, which escape-processes the value)
+    # and match with index()==1 (literal prefix) rather than a regex, so a
+    # name containing regex metacharacters cannot match the wrong section.
+    # `found && /^## / { exit }` stops each scan at the next section heading, so a
+    # section missing the field yields empty rather than bleeding the NEXT
+    # section's value in (which would flip a third-party skill's attribution).
+    source_url="$(SKILL_NAME="$skill_name" awk '
+      index($0, "## " ENVIRON["SKILL_NAME"]) == 1 { found=1; next }
+      found && /^## / { exit }
       found && /Source:/ { sub(/.*Source:[* ]*/, ""); sub(/[* ]*$/, ""); print; exit }
     ' "$notices")"
-    author="$(awk -v name="$skill_name" '
-      $0 ~ "^## " name { found=1; next }
+    author="$(SKILL_NAME="$skill_name" awk '
+      index($0, "## " ENVIRON["SKILL_NAME"]) == 1 { found=1; next }
+      found && /^## / { exit }
       found && /Copyright:/ { sub(/.*Copyright:[* ]*/, ""); sub(/[* ]*$/, ""); print; exit }
     ' "$notices")"
+    # License mirrors the Copyright block: take the THIRD_PARTY_NOTICES License
+    # field (dropping the "(see ...)" file pointer) so a vendored skill without a
+    # frontmatter `license:` key renders its actual license, not the default.
+    license_from_notices="$(SKILL_NAME="$skill_name" awk '
+      index($0, "## " ENVIRON["SKILL_NAME"]) == 1 { found=1; next }
+      found && /^## / { exit }
+      found && /License:/ { sub(/.*License:[* ]*/, ""); sub(/ *\(see.*$/, ""); sub(/[* ]*$/, ""); print; exit }
+    ' "$notices")"
+    # Normalize the long-form license name to its SPDX short id so the
+    # admonition reads "under the MIT license", not "under the MIT License license".
+    case "$license_from_notices" in
+      "MIT License") license_from_notices="MIT" ;;
+      "Apache License 2.0"|"Apache 2.0") license_from_notices="Apache-2.0" ;;
+    esac
   fi
   # Fallback: frontmatter metadata
   if [[ -z "$author" ]]; then
     local skill_md="$skill_dir/SKILL.md"
-    author="$(awk '/author:/{sub(/.*author: */, ""); print; exit}' "$skill_md" 2>/dev/null)"
+    author="$(parse_frontmatter "$skill_md" "author")"
   fi
-  license_id="$(parse_frontmatter "$skill_dir/SKILL.md" "license" 2>/dev/null)"
+  # Precedence: frontmatter `license:` (e.g. terraform-skill) > THIRD_PARTY_NOTICES
+  # License field > Apache-2.0 default.
+  license_id="$(parse_frontmatter "$skill_dir/SKILL.md" "license")"
+  [[ -z "$license_id" ]] && license_id="$license_from_notices"
   [[ -z "$license_id" ]] && license_id="Apache-2.0"
   [[ -z "$source_url" ]] && source_url="$GH_BASE/skills/$skill_name"
   [[ -z "$author" ]] && author="third party"
+  # Strip a leading "Copyright (c) <year> " prefix so the admonition shows a bare
+  # maintainer name (terraform-skill convention), not the raw copyright line.
+  author="$(printf '%s' "$author" | sed -E 's/^Copyright( \([cC]\))?[[:space:]]+[0-9]{4}(-[0-9]{4})?[[:space:]]+//')"
 
-  # Determine ownership: team-owned if source URL matches AWS orgs
+  # Determine ownership: team-owned if source URL matches AWS orgs. A vendored
+  # skill with a LICENSE file but no THIRD_PARTY_NOTICES entry is repo-native /
+  # team-owned by convention (third-party skills always carry a notices entry),
+  # so the fallback URL correctly resolves it to the team admonition.
   local is_team=false
   if [[ "$source_url" == *github.com/aws-samples/* || \
         "$source_url" == *github.com/aws/* || \
@@ -316,10 +421,15 @@ compute_out_path() {
   if [[ "$src" == skills/*/SKILL.md ]]; then
     local folder="${src#skills/}"
     folder="${folder%/SKILL.md}"
-    echo "$SKILLS_OUT/$folder/index.md"
+    local group
+    group="$(classify_skill "$folder")"
+    echo "$SKILLS_OUT/$group/$folder/index.md"
   elif [[ "$src" == skills/* ]]; then
     local rel="${src#skills/}"
-    echo "$SKILLS_OUT/$rel"
+    local skill_name="${rel%%/*}"
+    local group
+    group="$(classify_skill "$skill_name")"
+    echo "$SKILLS_OUT/$group/$rel"
   elif [[ "$src" == steering/* ]]; then
     local rel="${src#steering/}"
     echo "$STEERING_OUT/$rel"
@@ -330,6 +440,13 @@ compute_out_path() {
   elif [[ "$src" == examples/* ]]; then
     local rel="${src#examples/}"
     echo "$EXAMPLES_OUT/$rel"
+  elif [[ "$src" == devops-agent/*/SKILL.md ]]; then
+    local folder="${src#devops-agent/}"
+    folder="${folder%/SKILL.md}"
+    echo "$DEVOPS_OUT/$folder/index.md"
+  elif [[ "$src" == devops-agent/* ]]; then
+    local rel="${src#devops-agent/}"
+    echo "$DEVOPS_OUT/$rel"
   fi
 }
 
@@ -358,49 +475,121 @@ description: "Browse all APEX skills for AWS platform engineering — EKS archit
 > _This page is auto-generated by [`misc/update-pages.sh`](https://github.com/aws-samples/sample-apex-skills/blob/main/misc/update-pages.sh). Do not edit manually._
 
 EOF
+
+  # Collect skills into groups
+  local eks_skills="" ecs_skills="" general_skills=""
   for skill_dir in "$SKILLS_DIR"/*/; do
     local skill_md="$skill_dir/SKILL.md"
     [[ -f "$skill_md" ]] || continue
-    local folder name description
+    local folder name
     folder="$(basename "$skill_dir")"
     name="$(parse_frontmatter "$skill_md" "name")"
-    description="$(parse_frontmatter "$skill_md" "description")"
     [[ -n "$name" ]] || continue
-    [[ -n "$description" ]] || description="_(no description in frontmatter)_"
-    echo "## [$name](./$folder/)"
-    echo ""
-    echo "$description"
-    echo ""
+    local group
+    group="$(classify_skill "$folder")"
+    case "$group" in
+      eks) eks_skills="${eks_skills}${eks_skills:+ }$folder" ;;
+      ecs) ecs_skills="${ecs_skills}${ecs_skills:+ }$folder" ;;
+      *)   general_skills="${general_skills}${general_skills:+ }$folder" ;;
+    esac
   done
+
+  # Sort
+  eks_skills="$(echo "$eks_skills" | tr ' ' '\n' | sort | tr '\n' ' ')"
+  ecs_skills="$(echo "$ecs_skills" | tr ' ' '\n' | sort | tr '\n' ' ')"
+  general_skills="$(echo "$general_skills" | tr ' ' '\n' | sort | tr '\n' ' ')"
+
+  # EKS
+  echo "## EKS Skills"
+  echo ""
+  _emit_skills_index_grid "$eks_skills" "eks"
+  echo ""
+
+  # ECS
+  echo "## ECS Skills"
+  echo ""
+  local ecs_count
+  ecs_count="$(echo "$ecs_skills" | wc -w | tr -d ' ')"
+  if [ "$ecs_count" -eq 0 ]; then
+    echo "_(coming soon)_"
+  else
+    _emit_skills_index_grid "$ecs_skills" "ecs"
+  fi
+  echo ""
+
+  # General
+  echo "## General"
+  echo ""
+  _emit_skills_index_grid "$general_skills" "general"
+}
+
+# --- Emit a compact grid for the skills index page ---
+_emit_skills_index_grid() {
+  local skills_str="$1"
+  local group="$2"
+  local count cols
+
+  count="$(echo "$skills_str" | wc -w | tr -d ' ')"
+  if [ "$count" -le 4 ]; then
+    cols="$count"
+  elif [ "$count" -le 9 ]; then
+    cols=3
+  else
+    cols=4
+  fi
+
+  echo '<table>'
+  local col=0
+  for skill in $skills_str; do
+    if [ "$col" -eq 0 ]; then
+      echo -n '<tr>'
+    fi
+    echo -n "<td><a href=\"./$group/$skill/\"><b>${skill}</b></a></td>"
+    col=$((col + 1))
+    if [ "$col" -eq "$cols" ]; then
+      echo '</tr>'
+      col=0
+    fi
+  done
+  if [ "$col" -gt 0 ]; then
+    while [ "$col" -lt "$cols" ]; do
+      echo -n '<td></td>'
+      col=$((col + 1))
+    done
+    echo '</tr>'
+  fi
+  echo '</table>'
 }
 
 # --- Build skills.json manifest to stdout ---------------------------------
 build_manifest() {
   python3 - "$SKILLS_DIR" <<'PY'
-import json, os, re, sys
+import json, os, sys
+import yaml
 
 skills_dir = sys.argv[1]
 
 
 def parse_fm(path):
     with open(path, encoding="utf-8") as f:
-        lines = f.read().splitlines()
-    if not lines or lines[0].strip() != "---":
+        lines = f.readlines()
+    if not lines or lines[0].rstrip() != "---":
         return {}
-    fm = {}
+    fm_lines = []
     for line in lines[1:]:
-        if line.strip() == "---":
+        if line.rstrip() == "---":
             break
-        m = re.match(r'^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$', line)
-        if not m:
-            continue
-        k, v = m.group(1), m.group(2).strip()
-        if (v.startswith('"') and v.endswith('"')) or (
-            v.startswith("'") and v.endswith("'")
-        ):
-            v = v[1:-1]
-        fm[k] = v
-    return fm
+        fm_lines.append(line)
+    else:
+        print(f"ERROR: {path}: unclosed frontmatter block (missing closing '---')", file=sys.stderr)
+        sys.exit(2)
+    if len("".join(fm_lines).encode("utf-8")) > 64 * 1024:
+        print(f"ERROR: {path}: frontmatter block too large to parse", file=sys.stderr)
+        sys.exit(2)
+    data = yaml.safe_load("".join(fm_lines))
+    if not isinstance(data, dict):
+        return {}
+    return {k: str(v) for k, v in data.items() if v is not None}
 
 
 out = []
@@ -409,16 +598,77 @@ for entry in sorted(os.listdir(skills_dir)):
     sm = os.path.join(sd, "SKILL.md")
     if not os.path.isfile(sm):
         continue
-    fm = parse_fm(sm)
+    try:
+        fm = parse_fm(sm)
+    except Exception as e:
+        print(f"ERROR: {sm}: {e}", file=sys.stderr)
+        sys.exit(1)
     name = fm.get("name") or entry
+    # Classify by prefix
+    if entry.startswith("eks-"):
+        group = "eks"
+    elif entry.startswith("ecs-"):
+        group = "ecs"
+    else:
+        group = "general"
     out.append({
         "name": name,
         "description": fm.get("description", ""),
-        "path": f"/docs/skills/{entry}",
+        "path": f"/docs/skills/{group}/{entry}",
+        "group": group,
     })
 
 print(json.dumps(out, indent=2, ensure_ascii=False))
 PY
+}
+
+# --- Write _category_.json files for Docusaurus sidebar grouping -----------
+write_category_files() {
+  # EKS category
+  mkdir -p "$SKILLS_OUT/eks"
+  cat > "$SKILLS_OUT/eks/_category_.json" <<'CATEOF'
+{
+  "label": "EKS",
+  "position": 1,
+  "collapsible": true,
+  "collapsed": false
+}
+CATEOF
+
+  # ECS category
+  mkdir -p "$SKILLS_OUT/ecs"
+  cat > "$SKILLS_OUT/ecs/_category_.json" <<'CATEOF'
+{
+  "label": "ECS",
+  "position": 2,
+  "collapsible": true,
+  "collapsed": true
+}
+CATEOF
+
+  # ECS group index (Docusaurus needs at least one page per category)
+  cat > "$SKILLS_OUT/ecs/index.md" <<'CATEOF'
+---
+sidebar_position: 1
+title: ECS Skills
+description: "APEX skills for Amazon ECS platform engineering — architecture and launch-type selection, deployments and CI/CD, security and compliance, operational reviews, observability, and GPU/GenAI workloads."
+---
+
+# ECS Skills
+
+APEX skills for Amazon ECS platform engineering. This group covers Day-0 architecture and compute-model selection (Fargate, EC2, Managed Instances, Express Mode, ECS Anywhere), deployment strategies and CI/CD pipelines, security hardening and compliance, structured operational-excellence reviews, observability stack design, and GPU/ML/GenAI workloads on ECS. Browse the individual skills in the sidebar.
+CATEOF
+
+  # General category
+  mkdir -p "$SKILLS_OUT/general"
+  cat > "$SKILLS_OUT/general/_category_.json" <<'CATEOF'
+{
+  "label": "General",
+  "position": 3,
+  "collapsible": true,
+  "collapsed": false
+}
+CATEOF
 }
 
 # --- Recursive cleanup: remove wrappers not in the expected set -----------
@@ -466,45 +716,54 @@ EOF
     echo ""
     echo "$description"
     echo ""
-  done < <(find "$EXAMPLES_DIR" -name 'README.md' -print0 | sort -z)
+  done < <(find "$EXAMPLES_DIR" -type d -name '.terraform' -prune -o -type d -name '.*' -prune -o -name 'README.md' -print0 | sort -z)
 }
 
 # --- Build examples.json manifest to stdout --------------------------------
 build_examples_manifest() {
   python3 - "$EXAMPLES_DIR" <<'PY'
-import json, os, re, sys
+import json, os, sys
+import yaml
 
 examples_dir = sys.argv[1]
 
 
 def parse_fm(path):
     with open(path, encoding="utf-8") as f:
-        lines = f.read().splitlines()
-    if not lines or lines[0].strip() != "---":
+        lines = f.readlines()
+    if not lines or lines[0].rstrip() != "---":
         return {}
-    fm = {}
+    fm_lines = []
     for line in lines[1:]:
-        if line.strip() == "---":
+        if line.rstrip() == "---":
             break
-        m = re.match(r'^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$', line)
-        if not m:
-            continue
-        k, v = m.group(1), m.group(2).strip()
-        if (v.startswith('"') and v.endswith('"')) or (
-            v.startswith("'") and v.endswith("'")
-        ):
-            v = v[1:-1]
-        fm[k] = v
-    return fm
+        fm_lines.append(line)
+    else:
+        print(f"ERROR: {path}: unclosed frontmatter block (missing closing '---')", file=sys.stderr)
+        sys.exit(2)
+    if len("".join(fm_lines).encode("utf-8")) > 64 * 1024:
+        print(f"ERROR: {path}: frontmatter block too large to parse", file=sys.stderr)
+        sys.exit(2)
+    data = yaml.safe_load("".join(fm_lines))
+    if not isinstance(data, dict):
+        return {}
+    return {k: str(v) for k, v in data.items() if v is not None}
 
 
 out = []
 for root, dirs, files in sorted(os.walk(examples_dir)):
+    # Prune gitignored/hidden trees (e.g. examples/**/.terraform) so a large
+    # no-frontmatter README under them never aborts the generator.
+    dirs[:] = [d for d in dirs if d != ".terraform" and not d.startswith(".")]
     dirs.sort()
     if "README.md" not in files:
         continue
     readme_path = os.path.join(root, "README.md")
-    fm = parse_fm(readme_path)
+    try:
+        fm = parse_fm(readme_path)
+    except Exception as e:
+        print(f"ERROR: {readme_path}: {e}", file=sys.stderr)
+        sys.exit(1)
     name = fm.get("name")
     if not name:
         continue
@@ -543,16 +802,18 @@ if [[ "$MODE" == "dry-run" ]]; then
 fi
 
 # Collect all tracked .md under skills/ and steering/
-mapfile -t ALL_MD < <(git ls-files -- 'skills/**/*.md' 'steering/*.md' 'steering/**/*.md' 'examples/**/*.md')
+mapfile -t ALL_MD < <(git ls-files -- 'skills/**/*.md' 'steering/*.md' 'steering/**/*.md' 'examples/**/*.md' 'devops-agent/**/*.md')
 
-declare -a EXPECTED_SKILL_FILES=("index.md")
+declare -a EXPECTED_SKILL_FILES=("index.md" "ecs/index.md")
 declare -a EXPECTED_STEERING_FILES=("index.md")
 declare -a EXPECTED_EXAMPLES_FILES=("index.md")
+declare -a EXPECTED_DEVOPS_FILES=("index.md")
 
 # --- Per-file wrappers ---
 for src in "${ALL_MD[@]}"; do
-  # Skip skills/README.md (marker-generated, not a docs page)
+  # Skip skills/README.md and devops-agent/README.md (marker-generated, not docs pages)
   [[ "$src" == "skills/README.md" ]] && continue
+  [[ "$src" == "devops-agent/README.md" ]] && continue
 
   out_file="$(compute_out_path "$src")"
   [[ -n "$out_file" ]] || continue
@@ -564,6 +825,8 @@ for src in "${ALL_MD[@]}"; do
     EXPECTED_STEERING_FILES+=("${out_file#"$STEERING_OUT"/}")
   elif [[ "$src" == examples/* ]]; then
     EXPECTED_EXAMPLES_FILES+=("${out_file#"$EXAMPLES_OUT"/}")
+  elif [[ "$src" == devops-agent/* ]]; then
+    EXPECTED_DEVOPS_FILES+=("${out_file#"$DEVOPS_OUT"/}")
   fi
 
   title="$(derive_title "$REPO_ROOT/$src")"
@@ -571,7 +834,7 @@ for src in "${ALL_MD[@]}"; do
 
   if [[ "$MODE" == "dry-run" ]]; then
     echo "--- $out_file ---"
-    build_wrapper "$src" "$title" "${description:-}" | head -10
+    build_wrapper "$src" "$title" "${description:-}" | head -10 || true
     echo "  [... body truncated ...]"
     echo ""
   else
@@ -584,13 +847,18 @@ done
 # --- Skills index (card grid) ---
 if [[ "$MODE" == "dry-run" ]]; then
   echo "--- $SKILLS_OUT/index.md ---"
-  build_skills_index | head -20
+  build_skills_index | head -20 || true
   echo "  [... truncated ...]"
   echo ""
 else
   mkdir -p "$SKILLS_OUT"
   build_skills_index > "$SKILLS_OUT/index.md.tmp"
   mv "$SKILLS_OUT/index.md.tmp" "$SKILLS_OUT/index.md"
+fi
+
+# --- Category files for sidebar grouping ---
+if [[ "$MODE" != "dry-run" ]]; then
+  write_category_files
 fi
 
 # --- Manifest ---
@@ -607,13 +875,106 @@ fi
 # --- Examples index (card grid) ---
 if [[ "$MODE" == "dry-run" ]]; then
   echo "--- $EXAMPLES_OUT/index.md ---"
-  build_examples_index | head -20
+  examples_index_out="$(build_examples_index)"
+  head -20 <<<"$examples_index_out"
   echo "  [... truncated ...]"
   echo ""
 else
   mkdir -p "$EXAMPLES_OUT"
   build_examples_index > "$EXAMPLES_OUT/index.md.tmp"
   mv "$EXAMPLES_OUT/index.md.tmp" "$EXAMPLES_OUT/index.md"
+fi
+
+# --- DevOps Agent index ---
+
+# Escape &, <, > so description text is safe to inject into HTML table cells.
+# Uses sed (not ${var//}) — bash 5.2 patsub_replacement expands & in replacements.
+html_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# First-sentence extraction that skips mid-sentence abbreviations ("e.g. ",
+# "i.e. ", "vs. ") so the ". " inside them is not treated as a sentence
+# boundary. Abbreviation patterns are anchored to a word boundary (start of
+# string, space, or open paren) so words merely ending in the same letters
+# (e.g. "devs.") still count as sentence ends. Prints the first real sentence
+# (with trailing period); prints the input unchanged if no real sentence
+# boundary exists.
+first_sentence() {
+  local text="$1" head="" rest="$1"
+  while [[ "$rest" == *". "* ]]; do
+    head="${head}${rest%%". "*}."
+    rest="${rest#*". "}"
+    case "$head" in
+      [eE].g.|*[\ \(][eE].g.|[iI].e.|*[\ \(][iI].e.|[vV]s.|*[\ \(][vV]s.) head="$head " ;;
+      *) printf '%s' "$head"; return ;;
+    esac
+  done
+  printf '%s' "$text"
+}
+
+build_devops_index() {
+  cat <<'INDEXEOF'
+---
+sidebar_position: 3.5
+title: DevOps Agent Skills
+description: "Skills ported for fully autonomous execution on AWS DevOps Agent — read-only EKS cluster assessments without interactive prompts."
+---
+
+# DevOps Agent Skills
+
+> _This page is auto-generated by [`misc/update-pages.sh`](https://github.com/aws-samples/sample-apex-skills/blob/main/misc/update-pages.sh). Do not edit manually._
+
+A subset of APEX skills ported for the [AWS DevOps Agent](https://docs.aws.amazon.com/devopsagent/latest/userguide/) runtime. These run fully autonomously — no interactive prompts, no scripts, no MCP server references.
+
+<table>
+<tr><th>Skill</th><th>Status</th><th>Description</th></tr>
+INDEXEOF
+
+  for skill_dir in "$DEVOPS_DIR"/*/; do
+    local skill_md="$skill_dir/SKILL.md"
+    [[ -f "$skill_md" ]] || continue
+    local folder
+    folder="$(basename "$skill_dir")"
+    local title
+    title="$(parse_frontmatter "$skill_md" "name")"
+    [[ -z "$title" ]] && title="$(title_from_filename "$folder")"
+    local desc
+    desc="$(parse_frontmatter "$skill_md" "description")"
+    [[ -z "$desc" ]] && desc="<em>(no description)</em>"
+    # Truncate at first sentence boundary (". " only — avoids cutting "EKS 1.32";
+    # first_sentence skips abbreviations like "e.g. " / "i.e. ").
+    # Fall back to word boundary + ellipsis for descriptions without sentence ends
+    local first
+    first="$(first_sentence "$desc")"
+    if [[ "$first" != "$desc" ]]; then
+      desc="$first"
+    elif [[ ${#desc} -gt 150 ]]; then
+      desc="${desc:0:150}"
+      desc="${desc% *}…"
+    fi
+    if [[ ${#desc} -gt 200 ]]; then
+      desc="${desc:0:200}"
+      desc="${desc% *}…"
+    fi
+    local status="Placeholder"
+    [[ -d "$skill_dir/references" ]] && status="Active"
+    [[ "$desc" != "<em>(no description)</em>" ]] && desc="$(html_escape "$desc")"
+    echo "<tr><td><a href=\"./$folder/\"><b>$title</b></a></td><td>$status</td><td>$desc</td></tr>"
+  done
+  echo "</table>"
+}
+
+if [[ "$MODE" == "dry-run" ]]; then
+  echo "--- $DEVOPS_OUT/index.md ---"
+  devops_index_out="$(build_devops_index)"
+  head -20 <<<"$devops_index_out"
+  echo "  [... truncated ...]"
+  echo ""
+else
+  mkdir -p "$DEVOPS_OUT"
+  build_devops_index > "$DEVOPS_OUT/index.md.tmp"
+  mv "$DEVOPS_OUT/index.md.tmp" "$DEVOPS_OUT/index.md"
 fi
 
 # --- Examples manifest ---
@@ -635,6 +996,7 @@ if [[ "$MODE" == "run" ]]; then
   cleanup_stale_tree "$SKILLS_OUT" "${EXPECTED_SKILL_FILES[@]}"
   cleanup_stale_tree "$STEERING_OUT" "${EXPECTED_STEERING_FILES[@]}"
   cleanup_stale_tree "$EXAMPLES_OUT" "${EXPECTED_EXAMPLES_FILES[@]}"
+  cleanup_stale_tree "$DEVOPS_OUT" "${EXPECTED_DEVOPS_FILES[@]}"
 fi
 
 # --- Dry-run exits here ---
@@ -668,7 +1030,7 @@ if [[ "$MODE" == "check" ]]; then
     echo "Fix: run ./misc/update-pages.sh locally, commit the result."
     exit 1
   fi
-  echo "✓ Docusaurus wrappers + manifests are in sync with skills/, steering/, and examples/"
+  echo "✓ Docusaurus wrappers + manifests are in sync with skills/, steering/, examples/, and devops-agent/"
   exit 0
 fi
 
@@ -676,10 +1038,12 @@ fi
 skill_count="$(find "$SKILLS_OUT" -name '*.md' | wc -l)"
 steering_count="$(find "$STEERING_OUT" -name '*.md' | wc -l)"
 examples_count="$(find "$EXAMPLES_OUT" -name '*.md' | wc -l)"
+devops_count="$(find "$DEVOPS_OUT" -name '*.md' 2>/dev/null | wc -l)"
 examples_static_count="$(find "$EXAMPLES_STATIC" -type f 2>/dev/null | wc -l)"
 echo "✅ Generated Docusaurus wrappers and manifests:"
-echo "   Skills:    $skill_count files in misc/website/docs/skills/"
-echo "   Steering:  $steering_count files in misc/website/docs/steering/"
-echo "   Examples:  $examples_count files in misc/website/docs/examples/"
-echo "   Static:    $examples_static_count files in misc/website/static/examples/"
-echo "   Manifests: misc/website/static/manifests/{skills,examples}.json"
+echo "   Skills:      $skill_count files in misc/website/docs/skills/"
+echo "   Steering:    $steering_count files in misc/website/docs/steering/"
+echo "   Examples:    $examples_count files in misc/website/docs/examples/"
+echo "   DevOps Agent: $devops_count files in misc/website/docs/devops-agent/"
+echo "   Static:      $examples_static_count files in misc/website/static/examples/"
+echo "   Manifests:   misc/website/static/manifests/{skills,examples}.json"

@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
@@ -19,6 +21,26 @@ const config: Config = {
     format: 'detect',
     hooks: {
       onBrokenMarkdownLinks: 'warn',
+    },
+    // Docusaurus treats README.md as a directory-index doc, so a generated
+    // README.md wrapper sitting next to an index.md (e.g. the
+    // eks-cost-intelligence contributor README next to its SKILL.md wrapper)
+    // would claim the same route — "Duplicate routes found!" — and make
+    // plugin-client-redirects emit the same redirect twice. Give such
+    // READMEs an explicit non-index slug instead of dropping the page.
+    parseFrontMatter: async (params) => {
+      const result = await params.defaultParseFrontMatter(params);
+      const docsRoot = path.join(__dirname, 'docs');
+      const relPath = path.relative(docsRoot, params.filePath).split(path.sep).join('/');
+      const match = !relPath.startsWith('..') && relPath.match(/^(.+)\/README\.md$/);
+      if (
+        match &&
+        !result.frontMatter.slug &&
+        fs.existsSync(path.join(path.dirname(params.filePath), 'index.md'))
+      ) {
+        result.frontMatter.slug = `/${match[1]}/README`;
+      }
+      return result;
     },
   },
 
@@ -51,7 +73,7 @@ const config: Config = {
             codeRepository: 'https://github.com/aws-samples/sample-apex-skills',
             programmingLanguage: ['TypeScript', 'Python', 'Bash', 'HCL'],
             license: 'https://opensource.org/licenses/MIT-0',
-            runtimePlatform: 'Claude Code, Kiro CLI',
+            runtimePlatform: 'Claude Code, Kiro CLI, AWS DevOps Agent',
           },
         ],
       }),
@@ -80,12 +102,29 @@ const config: Config = {
     ],
   ],
 
+  plugins: [
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        createRedirects(existingPath) {
+          // Redirect old flat skill paths to new grouped paths
+          const groupedMatch = existingPath.match(/^\/docs\/skills\/(eks|ecs|general)\/(.+)/);
+          if (groupedMatch) {
+            const skillName = groupedMatch[2].replace(/\/$/, '');
+            return [`/docs/skills/${skillName}`];
+          }
+          return undefined;
+        },
+      },
+    ],
+  ],
+
   themeConfig: {
     metadata: [
       {property: 'og:image', content: 'https://aws-samples.github.io/sample-apex-skills/img/og-image.svg'},
       {name: 'twitter:image', content: 'https://aws-samples.github.io/sample-apex-skills/img/og-image.svg'},
       {name: 'twitter:card', content: 'summary_large_image'},
-      {name: 'keywords', content: 'AWS, EKS, platform engineering, AI agent skills, Claude Code, Kiro CLI, Kubernetes, infrastructure as code, agentic AI, DevOps automation'},
+      {name: 'keywords', content: 'AWS, EKS, platform engineering, AI agent skills, Claude Code, Kiro CLI, AWS DevOps Agent, Kubernetes, infrastructure as code, agentic AI, DevOps automation'},
     ],
     navbar: {
       title: 'APEX Skills',

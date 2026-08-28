@@ -36,6 +36,7 @@ skills/eks-cost-intelligence/
 │   ├── storage-costs.md                  # Dimension 4 checks
 │   ├── observability-costs.md            # Dimension 5 checks
 │   ├── idle-resources.md                 # Dimension 6 checks
+│   ├── fargate-costs.md                  # Fargate detection + Fargate-specific checks
 │   ├── report-generation.md              # Scoring algorithm + report template
 │   ├── cost-data-collection.md           # API calls for data sources
 │   ├── waste-calculation.md              # Dollar waste formulas
@@ -50,7 +51,7 @@ skills/eks-cost-intelligence/
 - AWS credentials with EKS read access
 - `kubectl` configured for the target cluster
 - **Required permissions:** `eks:DescribeCluster`, `eks:ListClusters`, `eks:ListNodegroups`, `ec2:DescribeInstances`, `ec2:DescribeVolumes`, `elasticloadbalancing:DescribeLoadBalancers`
-- **Optional (for richer analysis):** `ce:GetCostAndUsage`, `cloudwatch:GetMetricData`, `pricing:GetProducts`
+- **Optional (for richer analysis):** `ce:GetCostAndUsage`, `cloudwatch:GetMetricData`, `pricing:GetProducts`, `elasticfilesystem:DescribeFileSystems`, `elasticfilesystem:DescribeLifecycleConfiguration`
 
 ## Relationship to other skills
 

@@ -1,6 +1,6 @@
 # DNS & Certificate Management
 
-> **Rating model:** Express every finding as **Impact 1–5** using the *Impact Indicator* rubric (security/reputation · business/revenue · nature & effort to remediate). Band mapping is a starting point — GREEN→🟡 1–2, AMBER→🟠 3–4, RED→🔴 5 — but the Impact Indicator criteria set the final score (e.g. an easy-to-deploy prerequisite stays 🟡 low even if it blocks a path). All checks are **read-only** (`kubectl get/describe`, `aws … describe/list`).
+> **Rating model:** Express every finding as **Impact 0–5** using the *Impact Indicator* rubric, weighing three dimensions **in priority order: (1) business logic / revenue — the live traffic at stake · (2) security / reputation · (3) effort to remediate**. **Effort is NOT a severity driver** — a fix being easy or hard never moves the score (it depends on who implements it). **Presence is decided by estate state** — absent controller / empty estate / orphaned dead config = **non-event (0)**; a broken controller is **tech debt (1)** with zero bound routes or a **suspected active outage** (flagged outside the score) with bound routes; a running controller with a **control-plane CVE counts even at zero routes**. See `ingress-discovery.md` for the full presence/stacking rules. Band mapping is a starting point — 🟢 0 / 🟡 1–2 / 🟠 3–4 / 🔴 5 — but the Impact Indicator criteria set the final score (e.g. an easy-to-deploy prerequisite stays 🟡 low even if it blocks a path). All checks are **read-only** (`kubectl get/describe`, `aws … describe/list`).
 
 
 ## Purpose
@@ -25,7 +25,7 @@ Assess DNS automation and TLS certificate management for Gateway API migration.
 **Impact (per Impact Indicator):**
 - 🟡 1–2 (Low): external-dns installed with `gateway-httproute` source, IRSA configured
 - 🟠 3–4 (Medium): external-dns installed but only `ingress` source — needs config update
-- 🔴 5 (High): No external-dns — DNS records managed manually
+- 🔴 5 (High): No external-dns — DNS records managed manually. *(Precedence: on a **dead/absent estate** — no live controller/Ingress to cut over, Case A/B in `report-generation.md` §1.0 — there is nothing to auto-manage, so this is a **non-event listed at 0**, not 🔴5; it never pulls the score below the headline.)*
 - ⬜ Unknown: Cannot determine DNS management
 
 ### 4.2 — cert-manager Gateway API Integration

@@ -1,6 +1,6 @@
 # Traffic & Routing Complexity
 
-> **Rating model:** Express every finding as **Impact 1–5** using the *Impact Indicator* rubric (security/reputation · business/revenue · nature & effort to remediate). Band mapping is a starting point — GREEN→🟡 1–2, AMBER→🟠 3–4, RED→🔴 5 — but the Impact Indicator criteria set the final score (e.g. an easy-to-deploy prerequisite stays 🟡 low even if it blocks a path). All checks are **read-only** (`kubectl get/describe`, `aws … describe/list`).
+> **Rating model:** Express every finding as **Impact 0–5** using the *Impact Indicator* rubric, weighing three dimensions **in priority order: (1) business logic / revenue — the live traffic at stake · (2) security / reputation · (3) effort to remediate**. **Effort is NOT a severity driver** — a fix being easy or hard never moves the score (it depends on who implements it). **Presence is decided by estate state** — absent controller / empty estate / orphaned dead config = **non-event (0)**; a broken controller is **tech debt (1)** with zero bound routes or a **suspected active outage** (flagged outside the score) with bound routes; a running controller with a **control-plane CVE counts even at zero routes**. See `ingress-discovery.md` for the full presence/stacking rules. Band mapping is a starting point — 🟢 0 / 🟡 1–2 / 🟠 3–4 / 🔴 5 — but the Impact Indicator criteria set the final score (e.g. an easy-to-deploy prerequisite stays 🟡 low even if it blocks a path). All checks are **read-only** (`kubectl get/describe`, `aws … describe/list`).
 
 
 ## Purpose
@@ -50,7 +50,7 @@ Example: `Ingress/nginx-alb: app.example.com/* → nginx-service:80 (Prefix, TLS
 - URL rewriting → HTTPRoute `filters[].urlRewrite`
 - Request redirect → HTTPRoute `filters[].requestRedirect`
 - Request/response header modification → HTTPRoute `filters[].requestHeaderModifier`
-- Authentication → No native Gateway API equivalent (use ALB Cognito/OIDC annotation)
+- Authentication → No native Gateway API equivalent (use ALB Cognito/OIDC annotation — **interactive browser redirect only**; non-interactive callers need an app-level or token/mTLS scheme)
 - Rate limiting → No native equivalent (use AWS WAF)
 - CORS → No native equivalent (use application-level or WAF)
 
@@ -61,7 +61,7 @@ Example: `Ingress/nginx-alb: app.example.com/* → nginx-service:80 (Prefix, TLS
 
 **Impact (per Impact Indicator):**
 - 🟡 1–2 (Low): Features used have direct HTTPRoute equivalents (weighted routing, header matching, rewrites)
-- 🟠 3–4 (Medium): Some features need AWS service substitution (WAF for rate limiting, Cognito for auth)
+- 🟠 3–4 (Medium): Some features need AWS service substitution (WAF for rate limiting, Cognito for auth). **Auth caveat:** ALB OIDC/Cognito only substitutes faithfully for **browser** callers — with **non-interactive** clients (scripts, cron, CI, partner APIs) it escalates per `report-generation.md` §1.3 (up to 🔴 5) when the credential check also cannot move into a closed/unmodifiable backend.
 - 🔴 5 (High): Critical dependency on nginx lua/snippets with no Gateway API path
 - ⬜ Unknown: Cannot determine feature usage
 
@@ -87,14 +87,14 @@ Example: `Ingress/nginx-alb: app.example.com/* → nginx-service:80 (Prefix, TLS
 
 **What to check (read-only):** `alb.ingress.kubernetes.io/group.name` and `group.order` on each Ingress.
 - Multiple Ingresses (often across namespaces) sharing one `group.name` are served by a **single ALB**. This materially affects Gateway listener design and ALB consolidation during migration.
-- **Record group membership in the topology JSON and Routing Topology** — do not drop it.
+- **Record group membership in the Routing Topology table** — do not drop it.
 
 ### 5.5 — Declarative Blind Spot & Optional Route Verification
 
-**Blind spot (always note when snippets are present):** topology and routing are derived from **Ingress objects only**. Routes injected via `server-snippet` / `configuration-snippet` (e.g. a raw `location` block) **do not appear** as Ingress rules/backends, so the 3D diagram and Routing Topology under-count them. State this limitation explicitly in the report whenever snippet annotations exist — these are exactly the routes that block migration.
+**Blind spot (always note when snippets are present):** topology and routing are derived from **Ingress objects only**. Routes injected via `server-snippet` / `configuration-snippet` (e.g. a raw `location` block) **do not appear** as Ingress rules/backends, so the Routing Topology table **and the HTML 3D Routing Diagram** (both derived from the same Ingress-only data) under-count them. State this limitation explicitly in the report whenever snippet annotations exist — these are exactly the routes that block migration.
 
 **Optional deep read (requires `--allow-sensitive-data-access`, still read-only):**
 - Enumerate snippet-injected routes: `kubectl exec <nginx-pod> -n <ns> -- nginx -T` and scan for `location` blocks not represented by an Ingress.
 - Verify live L7 behavior in-cluster: from a throwaway pod, `wget/curl` each controller's ClusterIP with the `Host:` header and record the status code (200/301/308/404/5xx) in Routing Topology. This raises confidence that routing actually works (vs. config-only inference). Keep it **optional** — the assessment is config-first.
 
-**Topology data to collect:** Record all routing patterns, hosts, paths, and features for the 3D visualization.
+**Routing data to collect:** Record all routing patterns, hosts, paths, and features in the Routing Topology table.

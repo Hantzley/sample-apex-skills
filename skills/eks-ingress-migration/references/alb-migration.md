@@ -1,10 +1,12 @@
 # ALB Controller Migration Path
 
-> **Rating model:** Express every finding as **Impact 1–5** using the *Impact Indicator* rubric (security/reputation · business/revenue · nature & effort to remediate). Band mapping is a starting point — GREEN→🟡 1–2, AMBER→🟠 3–4, RED→🔴 5 — but the Impact Indicator criteria set the final score (e.g. an easy-to-deploy prerequisite stays 🟡 low even if it blocks a path). All checks are **read-only** (`kubectl get/describe`, `aws … describe/list`).
+> **Rating model:** Express every finding as **Impact 0–5** using the *Impact Indicator* rubric, weighing three dimensions **in priority order: (1) business logic / revenue — the live traffic at stake · (2) security / reputation · (3) effort to remediate**. **Effort is NOT a severity driver** — a fix being easy or hard never moves the score (it depends on who implements it). **Presence is decided by estate state** — absent controller / empty estate / orphaned dead config = **non-event (0)**; a broken controller is **tech debt (1)** with zero bound routes or a **suspected active outage** (flagged outside the score) with bound routes; a running controller with a **control-plane CVE counts even at zero routes**. See `ingress-discovery.md` for the full presence/stacking rules. Band mapping is a starting point — 🟢 0 / 🟡 1–2 / 🟠 3–4 / 🔴 5 — but the Impact Indicator criteria set the final score (e.g. an easy-to-deploy prerequisite stays 🟡 low even if it blocks a path). All checks are **read-only** (`kubectl get/describe`, `aws … describe/list`).
 
 
 ## Purpose
 Guide migration from NGINX Ingress Controller to AWS Load Balancer Controller (ALB Ingress), converting all NGINX-specific annotations to their ALB equivalents.
+
+> **This is the first hop of the complete path.** After NGINX → **LBC ALB Ingress** (this file), the *second hop* **LBC Ingress → Gateway API** can be automated with the official **`lbc-migrate` toolkit** — see `references/lbc-migrate-toolkit.md`. Full path: NGINX Ingress → LBC ALB Ingress → Gateway API.
 
 ## When to Recommend This Path
 
@@ -89,7 +91,7 @@ alb.ingress.kubernetes.io/transforms.<service-name>: |
 
 **Note:** Add comment in manifest: `# REMOVED: CORS — configure via AWS WAF rules or application middleware`
 
-> **Effort reality (High, not Medium):** CORS has **no faithful ALB/WAF equivalent** — AWS WAF cannot inject CORS *response* headers; in practice CORS must move to the **application backend (code change)**. NGINX `rate-limit`/`limit-rps` is per-second, per-path/per-client; **AWS WAF rate-based rules** are coarser (per-IP over a multi-minute window), **cost extra**, and use a completely different config model. Treat CORS / rate-limit / IP-allowlist conversions as **🔴 High impact/effort**, not a simple Medium swap.
+> **Fidelity gap (not a simple annotation swap):** CORS has **no *faithful* ALB/WAF equivalent for the dynamic case**. ALB *can* inject **static** CORS response headers via listener-rule **response-header** actions (added Nov 2024), which covers a fixed `Access-Control-Allow-Origin`; but **dynamic origin reflection** (echoing the request `Origin` against an allowlist) and **preflight `OPTIONS` short-circuiting** have no native ALB/WAF equivalent and still need the **application backend** (or a Lambda/edge layer). AWS WAF cannot inject CORS response headers at all. NGINX `rate-limit`/`limit-rps` is per-second, per-path/per-client; **AWS WAF rate-based rules** are coarser — they **default to per-IP aggregation** (custom aggregation keys are available) over a configurable **evaluation window (60–600s)**, **cost extra**, and use a completely different config model. Rate these by the **Impact Indicator** and the Feature-Gap classification in `report-generation.md` — by the live traffic/security the lost fidelity affects, **not** by remediation effort (the app/WAF rework is an operator note, never a severity input). Because they lack a faithful equivalent they are **not** trivial swaps, but the band comes from the rubric, not from how much work the change is.
 
 ### Authentication
 
@@ -98,7 +100,7 @@ alb.ingress.kubernetes.io/transforms.<service-name>: |
 | `nginx...auth-url` + `nginx...auth-signin` | `alb.ingress.kubernetes.io/auth-type: oidc` |
 | (external auth service) | `alb.ingress.kubernetes.io/auth-idp-oidc: '{"issuer":"...","authorizationEndpoint":"...","tokenEndpoint":"...","userInfoEndpoint":"...","secretName":"..."}'` |
 
-> **🔴 Behavior change — NOT a like-for-like conversion (High impact).** Basic Auth (`auth-type: basic`, an `Authorization: Basic` header — commonly used by **scripts, cron jobs and machine/API clients**) → ALB **OIDC/Cognito** replaces header auth with an **interactive browser login redirect** to an Identity Provider. Every **non-interactive** caller (automation, CI, partner APIs) **breaks immediately**. This requires client re-architecture (e.g. OIDC client-credentials flow, app-level token auth, or mTLS) and stakeholder coordination — never present `auth-*` → OIDC as a simple annotation swap. Score it **High** and call out the affected client types.
+> **⚠️ Behavior change — NOT a like-for-like conversion.** Basic Auth (`auth-type: basic`, an `Authorization: Basic` header — commonly used by **scripts, cron jobs and machine/API clients**) → ALB **OIDC/Cognito** replaces header auth with an **interactive browser login redirect** to an Identity Provider. Every **non-interactive** caller (automation, CI, partner APIs) **breaks immediately**. This requires client re-architecture (e.g. OIDC client-credentials flow, app-level token auth, or mTLS) and stakeholder coordination — never present `auth-*` → OIDC as a simple annotation swap. **Score it via `report-generation.md` §1.3 as Tier-B** — the faithful workaround is **app-level credential validation** — **escalating to Tier-A (up to 5) only when non-interactive clients are present *and* the backend is a closed/unmodifiable third-party app**, so the credential check cannot be moved into it. Always call out the affected client types.
 
 ### Body Size
 
@@ -163,7 +165,8 @@ alb.ingress.kubernetes.io/group.order: "10"
 **Impact (per Impact Indicator):**
 - 🟡 1–2 (Low): Only mechanical changes (class swap on the *same* controller, scheme/target-type, simple path) — but see the cutover note below.
 - 🟠 3–4 (Medium): URI rewrites → `transforms`, TLS → ACM, timeouts; plus the **new-ALB + DNS cutover** every class switch incurs.
-- 🔴 5 (High): `configuration-snippet`/`server-snippet`, **CORS, rate-limit, IP-allowlist, external auth** — no faithful ALB equivalent; needs WAF (extra cost, coarser) or **application/code changes**.
+- 🔴 5 (High), no workaround (Tier-A): `configuration-snippet`/`server-snippet` (and the other no-equivalent features — Lua, mirror-to-arbitrary-backend, regex rewrite with capture groups, TLS passthrough, mTLS client-cert). These need **application/code changes** and raise the Re-architecture Gate.
+- **Tier-B — score via the rubric, NOT automatically 🔴 5:** **CORS, rate-limit, IP-allowlist, Basic Auth → OIDC** have a faithful workaround (app/backend layer, or WAF / Security Group), so they are rated per the `report-generation.md` §1.3 Feature-Gap rubric — **Impact 2–3 while that workaround can be applied**, escalating to Tier-A (up to 5) only when it cannot (a closed/unmodifiable backend whose loss degrades a live business flow). For **Basic Auth → OIDC** the escalation additionally requires **non-interactive clients** — where every caller is a browser, ALB OIDC/Cognito is a faithful substitute. `report-generation.md` §1.3 is the source of truth for their score.
 - ⬜ Unknown: Cannot parse annotations
 
 > **Cutover note (applies to EVERY nginx→alb conversion):** switching `ingressClassName: nginx → alb` is a **cross-controller** change — the AWS LB Controller provisions a **new ALB**, and **traffic does not move until DNS is cut over** to it. This is a parallel-run + DNS cutover, **never** a zero-impact file edit. Therefore a bare class switch is **at least Medium**, even when the YAML diff is one line. (Changing the deprecated `kubernetes.io/ingress.class` annotation to `spec.ingressClassName` on the **same** class is the only genuinely Low case.)

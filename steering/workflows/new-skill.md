@@ -41,10 +41,12 @@ Goal of this phase: get crisp answers to the five scope questions below and deci
 Required inputs — ask for all five in a single turn:
 
 1. **Skill slug** (`<name>`) — lowercase, hyphenated, matches the target `skills/<name>/` directory.
+   - **Naming convention:** Prefix with the target AWS service (`eks-`, `ecs-`). This controls auto-grouping in README, docs, and sidebar. If your skill spans multiple services or is repo meta-tooling, omit the prefix (it lands in "General").
+   - **New service?** If your skill targets a service without existing skills in this repo (i.e., no existing `<service>-` prefix in `skills/`), create a GitHub issue requesting service onboarding first. This requires maintainer-side changes to grouping logic, a new steering hub, and a docs sidebar category. **STOP** — do not proceed until the issue is resolved and onboarding is confirmed.
 2. **One-sentence scope** — what the skill covers and for whom. This becomes the seed for the `description:` frontmatter that the triggering eval scores against.
 3. **Five example prompts the skill should trigger on** — positives. Ask for the phrasings a real user would type, not a tidy canonical form.
 4. **Which kind of skill** — knowledge (static references), setup-bridge (one-shot env configuration), or discovery (reads live state and emits a structured report). Matches the three classes in `../../skills/steering-workflow-creator/references/tool-routing.md`.
-5. **Target service and nearest service hub** — EKS, RDS, Lambda, or "service-agnostic / meta." Drives later fan-out (which service hub picks up the routing, which example file under `steering-workflow-creator/references/examples/` applies).
+5. **Target service and nearest service hub** — EKS, ECS, or another AWS service, or "service-agnostic / meta." Drives later fan-out (which service hub picks up the routing, which example file under `steering-workflow-creator/references/examples/` applies).
 
 Mode detection:
 
@@ -109,6 +111,7 @@ Classes of places to survey. For each class, `grep` with a reasonable search, en
 - **Sibling eval sets** — for each neighbour confirmed in Phase 3, `misc/evals/<sibling>/README.md`'s SIBLING_MAP block and `misc/evals/<sibling>/triggering.json`. This is the update the `update_sibling_map.py` helper script handles in Phase 5; surface the planned edits here so the author can review what will be inserted.
 - **Auto-generators** — `misc/update-steering-references.sh` and any sibling scripts. If the skill triggers a run of these, flag it.
 - **Skill-bundled steering workflows** — if the new skill ships structured engagement playbooks (STOP gates, phased flows), those belong in `steering/workflows/`, not under `skills/<name>/`. Each workflow needs: (1) a file in `steering/workflows/`, (2) a routing entry in the service hub (`steering/<service>.md`), (3) optionally a slash command in `steering/commands/apex/`. Use the `steering-workflow-creator` workflow for authoring. Surface this as a follow-up checklist item if the contributor has pre-authored workflows.
+- **DevOps Agent ports** — `devops-agent/` directory. If the skill has a Day 2 operational scope suitable for autonomous execution (read-only cluster assessment, scoring, reporting), check whether a DevOps Agent port should be created alongside the Claude Code skill. Surface as a follow-up item — porting is a separate workflow (see `devops-agent/README.md` contributing section).
 - **Grep pass** — `grep -r "<name>" -l .` to catch anything the class list missed. For greenfield skills, also grep domain keywords (e.g., "ingress" for an ingress assessment skill). Mentions in changelogs, screenshots, example output — each one decides on its own merits.
 
 For each proposed edit, show the file, the line, the before, and the after. Use the Edit tool or the `update_sibling_map.py` helper (Phase 5) depending on the edit type. Do not apply anything yet — this phase produces a proposal, Phase 5 applies it.
@@ -140,7 +143,7 @@ Steps, in order:
    ```
    Now assert the wrapper was actually generated — if you ran the scripts before `git add`, `update-pages.sh` reads an index without the new skill and silently emits no pages, which fails `docs-sync` CI later:
    ```bash
-   ls misc/website/docs/skills/<name>/index.md \
+   ls misc/website/docs/skills/*/<name>/index.md \
      || { echo "ERROR: wrapper not generated — 'git add' the skill BEFORE running update-pages.sh"; exit 1; }
    ```
    Stage all generated output and commit:
